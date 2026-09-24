@@ -10,22 +10,26 @@ index 5d362fa..0000000 100644
  [submodule "firmware/Kboot"]
  	path = firmware/Kboot
  	url = ../../selfcustody/Kboot
- diff --git a/vendor/embit b/vendor/embit
+
+diff --git a/vendor/embit b/vendor/embit
 index fff7ffa..5f700aa 160000
 --- a/vendor/embit
 +++ b/vendor/embit
 @@ -1 +1 @@
 -fff7ffa43f6ce088c5ba22cb3877a122bf01dc96
 +5f700aa3222da65c27331df50b9a899236cb5461
- diff --git a/src/krux/psbt.py b/src/krux/psbt.py
+
+diff --git a/src/krux/psbt.py b/src/krux/psbt.py
 --- a/src/krux/psbt.py
 +++ b/src/krux/psbt.py
 @@ -20,6 +20,7 @@
- # THE SOFTWARE.
  import gc
  from embit.psbt import PSBT, CompressMode
 +from embit.transaction import SIGHASH
-@@ -460,19 +461,91 @@ class PSBTSigner:
+ from uUR import UR, Types
+ from .baseconv import base_decode
+ from .krux_settings import t
+@@ -460,19 +461,142 @@ class PSBTSigner:
      def check_sighash(self):
 -        """Check that all inputs use SIGHASH_ALL (or DEFAULT for taproot).
 -
@@ -54,16 +58,18 @@ index fff7ffa..5f700aa 160000
 +    @staticmethod
 +    def _safe_type(value):
 +        return value is None or value in (
-+            SIGHASH.DEFAULT, SIGHASH.ALL, SIGHASH.ALL | SIGHASH.UNIFIED
++            SIGHASH.DEFAULT,
++            SIGHASH.ALL,
++            SIGHASH.UNIFIED | SIGHASH.ALL,
 +        )
 +
 +    def requested_sighash(self):
 +        """Return the single safe request passed to embit.sign_with.
 +
-+        A missing declaration retains the historical DEFAULT behaviour.  A unified
-+        declaration is selected only when every declared input agrees; this prevents
-+        signing one input with 0x21 and another with a standard digest while showing
-+        one approval screen.
++        Missing declarations keep the historical DEFAULT behavior. A unified opt-in
++        is selected only when every declared input agrees; this prevents signing one
++        input with 0x21 while another is signed with a standard digest while the same
++        approval screen is shown.
 +        """
 +        declared = {inp.sighash_type for inp in self.psbt.inputs}
 +        if len(declared) == 1:
@@ -73,15 +79,13 @@ index fff7ffa..5f700aa 160000
 +        return SIGHASH.DEFAULT
 +
 +    def unsignable_inputs(self, requested=None):
-+        """Return owned inputs that embit would skip for *requested*."""
++        """Return inputs that would be skipped for the current request."""
 +        requested = self.requested_sighash() if requested is None else requested
 +        result = []
 +        for index, inp in enumerate(self.psbt.inputs):
 +            declared = inp.sighash_type
 +            if declared is None:
 +                continue
-+            # DEFAULT is ALL for non-taproot inputs; embit performs the same
-+            # normalization before selecting the digest.
 +            effective = declared
 +            if not inp.is_taproot and effective == SIGHASH.DEFAULT:
 +                effective = SIGHASH.ALL
@@ -93,18 +97,62 @@ index fff7ffa..5f700aa 160000
 +        return result
 +
 +    def sighash_label(self):
-+        """Text and byte value for the approval/review screen."""
++        """Text and byte value to present on the approval screen."""
 +        requested = self.requested_sighash()
 +        if self.unsignable_inputs(requested):
 +            return (None, "mixed or unsupported sighash")
-+        return (requested, "Unified sighash" if requested & SIGHASH.UNIFIED else "Standard sighash")
-@@ -477,8 +550,32 @@ class PSBTSigner:
++        return (
++            requested,
++            "Unified sighash" if requested & SIGHASH.UNIFIED else "Standard sighash",
++        )
++
++    @staticmethod
++    def signed_hash_types(tx):
++        """Return the hash type carried by every signature that is already on tx."""
++
++        def hash_type(raw):
++            if not raw:
++                return None
++            return raw[-1] if len(raw) != 64 else SIGHASH.DEFAULT
++
++        found = {}
++        for i, inp in enumerate(tx.inputs):
++            for key, sig in inp.partial_sigs.items():
++                raw = bytes(sig)
++                found[(i, "partial", bytes(key.sec()))] = (hash_type(raw), raw)
++            for key, sig in inp.taproot_sigs.items():
++                raw = bytes(sig)
++                found[(i, "taproot", str(key))] = (hash_type(raw), raw)
++            key_sig = getattr(inp, "taproot_key_sig", None)
++            if key_sig is not None:
++                raw = bytes(key_sig)
++                found[(i, "taproot_key", b"")] = (hash_type(raw), raw)
++            if inp.final_scriptwitness and inp.final_scriptwitness.items:
++                raw = bytes(inp.final_scriptwitness.items[0])
++                found[(i, "witness", b"")] = (hash_type(raw), raw)
++        return found
++
++    @staticmethod
++    def sighash_type(tx):
++        """Return the sighash value to pass to sign_with."""
++        declared = {inp.sighash_type for inp in tx.inputs}
++        if len(declared) != 1 or not declared <= PSBTSigner.SIGNABLE_SIGHASH_TYPES:
++            return SIGHASH.DEFAULT
++        return declared.pop() or SIGHASH.DEFAULT
++
++    SIGNABLE_SIGHASH_TYPES = frozenset(
++        {
++            None,
++            SIGHASH.DEFAULT,
++            SIGHASH.ALL,
++            SIGHASH.UNIFIED | SIGHASH.ALL,
++        }
++    )
+@@ -477,8 +601,18 @@ class PSBTSigner:
      def add_signatures(self):
          """Add signatures to PSBT"""
          self.check_sighash()
 -        sigs_added = self.psbt.sign_with(self.wallet.key.root)
-+        # sign_with mutates inputs as it proceeds. Work on a serialized copy so a
-+        # malformed PSBT cannot leave the scanned object half-signed after failure.
 +        before = self.psbt.serialize()
 +        signing_psbt = PSBT.parse(before)
 +        requested = self.requested_sighash()
@@ -114,48 +162,172 @@ index fff7ffa..5f700aa 160000
 +        self._assert_added_signatures_match(signing_psbt, before, requested)
 +        self.psbt = signing_psbt
 +
-+    @staticmethod
-+    def _signature_hash_types(psbt):
-+        found = []
-+        for inp in psbt.inputs:
-+            for sig in inp.partial_sigs.values():
-+                raw = bytes(sig)
-+                if raw:
-+                    found.append(SIGHASH.DEFAULT if len(raw) == 64 else raw[-1])
-+            for sig in inp.taproot_sigs.values():
-+                raw = bytes(sig)
-+                if raw:
-+                    found.append(SIGHASH.DEFAULT if len(raw) == 64 else raw[-1])
-+            if getattr(inp, "taproot_key_sig", None):
-+                raw = bytes(inp.taproot_key_sig)
-+                found.append(SIGHASH.DEFAULT if len(raw) == 64 else raw[-1])
-+            if inp.final_scriptwitness and inp.final_scriptwitness.items:
-+                raw = bytes(inp.final_scriptwitness.items[0])
-+                if raw:
-+                    found.append(SIGHASH.DEFAULT if len(raw) == 64 else raw[-1])
-+            return found
-+
 +    def _assert_added_signatures_match(self, signed, before, requested):
-+        # The serialized comparison is deliberately conservative: a pre-existing
-+        # signature is allowed, but every signature produced by this call must carry
-+        # the type shown to the user. The pinned embit exposes the signature fields
-+        # above for all four script families.
 +        old = PSBT.parse(before)
-+        old_types = self._signature_hash_types(old)
-+        new_types = self._signature_hash_types(signed)
-+        added = new_types[len(old_types):]
-+        if any(value != requested for value in added):
-+            raise ValueError("signature hash type differs from the approval screen")
-@@ -517,6 +614,7 @@ class PSBTSigner:
++        old_types = self.signed_hash_types(old)
++        new_types = self.signed_hash_types(signed)
++        added = new_types.keys() - old_types.keys()
++        for where in added:
++            if new_types[where][0] != requested:
++                raise ValueError("signature hash type differs from the approval screen")
+@@ -517,6 +651,8 @@ class PSBTSigner:
+             # Copy any partial signatures
              if inp.partial_sigs:
                  trimmed_psbt.inputs[i].partial_sigs = inp.partial_sigs
-+            # Required for the next co-signer; signatures alone are not enough to
-+            # communicate that the coordinator requested the unified digest.
++
 +            if inp.sighash_type is not None:
 +                trimmed_psbt.inputs[i].sighash_type = inp.sighash_type
+ 
+             # Preserve witness UTXO if present
+             if inp.witness_utxo:
+                 trimmed_psbt.inputs[i].witness_utxo = inp.witness_utxo
+@@ -560,6 +696,22 @@ class PSBTSigner:
+     def psbt_qr(self):
+         """Returns the psbt in the same form it was read as a QR code"""
+         psbt_data = self.psbt.serialize()
++
++        # keep the field that tells the next signer the host asked for unified opt-in
++        if self.psbt is not None:
++            for inp in self.psbt.inputs:
++                if inp.sighash_type is not None and inp.sighash_type & SIGHASH.UNIFIED:
++                    psbt_data = self.psbt.serialize()
++                    break
+ 
+         self.psbt = None  # Remove PSBT free RAM
+         gc.collect()
+@@ -603,6 +755,7 @@ class PSBTSigner:
+             if descriptor_key.origin:
+                 # Pure xpub descriptors (Blue Wallet) don't have origin data
+                 xpubs[descriptor_key.key] = DerivationPath(
+                     descriptor_key.origin.fingerprint, descriptor_key.origin.derivation
+                 )
++
+             elif len(descriptor_keys) > 1:
+                 # Allow one descriptor key without origin data for taproot
+                 # Pure taptree descriptors won't have origin data for internal key.
+                 # Reject more than one origin-less key in a multi-key descriptor:
+@@ -715,6 +868,157 @@ def is_segwit_input(inp):
+     return inp.redeem_script is not None and inp.redeem_script.script_type() in (
+         P2WPKH,
+         P2WSH,
+     )
++
++
++def _input_matches_seed(inp, seed, network, fingerprint=None):
++    """Whether the input contains a key derived from the seed."""
++    if fingerprint is None:
++        fingerprint = seed.get_fingerprint(network)
++    for pub, derivation in inp.bip32_derivations.items():
++        if derivation.fingerprint == b"\x00\x00\x00\x00":
++            root = __import__("embit.bip32", fromlist=["HDKey"]).HDKey.from_seed(
++                seed.seed_bytes,
++                version=__import__("embit.networks", fromlist=["NETWORKS"]).NETWORKS[
++                    network
++                ]["xprv"],
++            )
++            try:
++                if root.derive(derivation.derivation).key.sec() == pub.sec():
++                    return True
++            except Exception:
++                pass
++        else:
++            if derivation.fingerprint.hex() == fingerprint:
++                return True
++    for pub, (leaf_hashes, derivation) in inp.taproot_bip32_derivations.items():
++        if derivation.fingerprint == b"\x00\x00\x00\x00":
++            root = __import__("embit.bip32", fromlist=["HDKey"]).HDKey.from_seed(
++                seed.seed_bytes,
++                version=__import__("embit.networks", fromlist=["NETWORKS"]).NETWORKS[
++                    network
++                ]["xprv"],
++            )
++            try:
++                if root.derive(derivation.derivation).key.xonly() == pub.xonly():
++                    return True
++            except Exception:
++                pass
++        else:
++            if derivation.fingerprint.hex() == fingerprint:
++                return True
++    return False
++
++
++def _screen_sighash_type(tx, seed, network):
++    """Hash type to show on the approval screen for a PSBT."""
++    requested = PSBTSigner.sighash_type(tx)
++    fingerprint = seed.get_fingerprint(network)
++
++    ours = [
++        inp for inp in tx.inputs if _input_matches_seed(inp, seed, network, fingerprint)
++    ]
++    if ours:
++        effective = {
++            (inp.sighash_type if inp.sighash_type is not None else requested)
++            for inp in ours
++        }
++        if len(effective) != 1:
++            return None, "mixed"
++        shown = effective.pop()
++        if shown not in PSBTSigner.SIGNABLE_SIGHASH_TYPES:
++            return None, "mixed"
++        return shown, None
++
++    for inp in tx.inputs:
++        if inp.sighash_type is not None and inp.sighash_type not in PSBTSigner.SIGNABLE_SIGHASH_TYPES:
++            return None, "unsupported"
++    return requested, None
++
++
++def _unsignable_inputs(tx, seed, network):
++    """Inputs this wallet owns that would be skipped by the requested hash type."""
++    requested = PSBTSigner.sighash_type(tx)
++    fingerprint = seed.get_fingerprint(network)
++    result = []
++    for idx, inp in enumerate(tx.inputs):
++        if inp.sighash_type is None:
++            continue
++        if not _input_matches_seed(inp, seed, network, fingerprint):
++            continue
++        effective = inp.sighash_type
++        if not inp.is_taproot and effective == SIGHASH.DEFAULT:
++            effective = SIGHASH.ALL
++        requested_effective = requested
++        if not inp.is_taproot and requested_effective == SIGHASH.DEFAULT:
++            requested_effective = SIGHASH.ALL
++        if effective != requested_effective:
++            result.append(idx)
++    return result
+ 
+ 
+ def is_segwit_input(inp):
+@@ -845,6 +1046,21 @@ class PSBTSigner:
+         return False
++
++    def _post_load_psbt_warn(self, signer):
++        """Warns cases of incorrect / missing PSBT info."""
++        sighash, label = signer.sighash_label()
++        if sighash is None:
++            self.ctx.display.clear()
++            self.ctx.display.draw_centered_text(
++                t("Cannot sign") + "\n\n" +
++                t("Inputs request different or unsupported signature hashes."),
++                highlight_prefix=":",
++            )
++            return self.prompt(t("Done"), BOTTOM_PROMPT_LINE)
++
++        self.ctx.display.clear()
++        self.ctx.display.draw_centered_text(
++            t(label) + " (0x%02x)" % sighash,
++            highlight_prefix=":",
++        )
++        if not self.prompt(t("Proceed?"), BOTTOM_PROMPT_LINE):
++            return False
++
++        return True
++
 *** End Patch
 
- diff --git a/src/krux/pages/home_pages/home.py b/src/krux/pages/home_pages/home.py
+diff --git a/src/krux/pages/home_pages/home.py b/src/krux/pages/home_pages/home.py
 --- a/src/krux/pages/home_pages/home.py
 +++ b/src/krux/pages/home_pages/home.py
 @@ -369,6 +369,25 @@ class Home(Page):
@@ -170,6 +342,7 @@ index fff7ffa..5f700aa 160000
 +                highlight_prefix=":",
 +            )
 +            return self.prompt(t("Done"), BOTTOM_PROMPT_LINE)
++
 +        self.ctx.display.clear()
 +        self.ctx.display.draw_centered_text(
 +            t(label) + " (0x%02x)" % sighash,
@@ -179,14 +352,25 @@ index fff7ffa..5f700aa 160000
 +            return False
 +
          # Warns in case of path mismatch
+         path_mismatch = signer.path_mismatch()
+         if path_mismatch:
+             self.ctx.display.clear()
+@@ -402,4 +421,6 @@ class Home(Page):
+             self.ctx.display.clear()
+             self.ctx.display.draw_centered_text(t("Fingerprint unset in PSBT"))
+             if not self.prompt(t("Proceed?"), BOTTOM_PROMPT_LINE):
+                 return False
++
++        return True
 *** End Patch
 
- diff --git a/tests/test_unified_sighash.py b/tests/test_unified_sighash.py
+diff --git a/tests/test_unified_sighash.py b/tests/test_unified_sighash.py
 new file mode 100644
 --- /dev/null
 +++ b/tests/test_unified_sighash.py
-@@ -0,0 +1,92 @@
-+"""Krux integration tests for the unified opt-in sighash port."""
+@@ -0,0 +1,150 @@
++"""Krux tests for unified opt-in sighash support."""
++
 +from embit.transaction import SIGHASH
 +
 +
@@ -194,47 +378,110 @@ new file mode 100644
 +    assert SIGHASH.UNIFIED == 0x20
 +
 +
-+def test_request_selection(tdata, m5stickv):
++def test_signable_types_are_passed_through(tdata, m5stickv):
 +    from embit.networks import NETWORKS
 +    from krux.key import Key, TYPE_SINGLESIG
-+    from krux.wallet import Wallet
 +    from krux.psbt import PSBTSigner
 +    from krux.qr import FORMAT_NONE
++    from krux.wallet import Wallet
 +
 +    wallet = Wallet(Key(tdata.TEST_MNEMONIC, TYPE_SINGLESIG, NETWORKS["test"]))
 +    signer = PSBTSigner(wallet, tdata.P2WPKH_PSBT, FORMAT_NONE)
 +    for inp in signer.psbt.inputs:
 +        inp.sighash_type = SIGHASH.ALL | SIGHASH.UNIFIED
-+    assert signer.requested_sighash() == 0x21
-+    assert signer.sighash_label() == (0x21, "Unified sighash")
++
++    assert signer.requested_sighash() == SIGHASH.ALL | SIGHASH.UNIFIED
++    assert signer.sighash_label() == (SIGHASH.ALL | SIGHASH.UNIFIED, "Unified sighash")
 +
 +
-+def test_unsafe_hash_is_rejected(tdata, m5stickv):
++def test_dangerous_types_fall_back_to_default(tdata, m5stickv):
 +    from embit.networks import NETWORKS
-+    from embit.transaction import SIGHASH
 +    from krux.key import Key, TYPE_SINGLESIG
-+    from krux.wallet import Wallet
 +    from krux.psbt import PSBTSigner
 +    from krux.qr import FORMAT_NONE
++    from krux.wallet import Wallet
 +
 +    wallet = Wallet(Key(tdata.TEST_MNEMONIC, TYPE_SINGLESIG, NETWORKS["test"]))
 +    signer = PSBTSigner(wallet, tdata.P2WPKH_PSBT, FORMAT_NONE)
 +    signer.psbt.inputs[0].sighash_type = SIGHASH.NONE
++
 +    assert signer.unsignable_inputs() == [0]
 +
 +
-+def test_trim_preserves_unified_declaration(tdata, m5stickv):
++def test_disagreeing_inputs_fall_back_to_default(tdata, m5stickv):
 +    from embit.networks import NETWORKS
-+    from embit.transaction import SIGHASH
 +    from krux.key import Key, TYPE_SINGLESIG
-+    from krux.wallet import Wallet
 +    from krux.psbt import PSBTSigner
 +    from krux.qr import FORMAT_NONE
++    from krux.wallet import Wallet
++
++    wallet = Wallet(Key(tdata.TEST_MNEMONIC, TYPE_SINGLESIG, NETWORKS["test"]))
++    signer = PSBTSigner(wallet, tdata.P2WPKH_PSBT, FORMAT_NONE)
++    signer.psbt.inputs[0].sighash_type = SIGHASH.ALL
++    signer.psbt.inputs[1].sighash_type = SIGHASH.ALL | SIGHASH.UNIFIED
++
++    assert signer.requested_sighash() == SIGHASH.DEFAULT
++    assert signer.unsignable_inputs() == [0, 1] or signer.unsignable_inputs() == [1, 0]
++
++
++def test_a_unified_opt_in_signs(tdata, m5stickv):
++    from embit.networks import NETWORKS
++    from krux.key import Key, TYPE_SINGLESIG
++    from krux.psbt import PSBTSigner
++    from krux.qr import FORMAT_NONE
++    from krux.wallet import Wallet
 +
 +    wallet = Wallet(Key(tdata.TEST_MNEMONIC, TYPE_SINGLESIG, NETWORKS["test"]))
 +    signer = PSBTSigner(wallet, tdata.P2WPKH_PSBT, FORMAT_NONE)
 +    for inp in signer.psbt.inputs:
 +        inp.sighash_type = SIGHASH.ALL | SIGHASH.UNIFIED
-+    # No signing required to verify the PSBT field survives the trim operation.
++
++    assert signer.requested_sighash() == (SIGHASH.ALL | SIGHASH.UNIFIED)
++    assert signer.sighash_label() == (SIGHASH.ALL | SIGHASH.UNIFIED, "Unified sighash")
++
++
++def test_trim_preserves_unified_declaration(tdata, m5stickv):
++    from embit.networks import NETWORKS
++    from krux.key import Key, TYPE_SINGLESIG
++    from krux.psbt import PSBTSigner
++    from krux.qr import FORMAT_NONE
++    from krux.wallet import Wallet
++
++    wallet = Wallet(Key(tdata.TEST_MNEMONIC, TYPE_SINGLESIG, NETWORKS["test"]))
++    signer = PSBTSigner(wallet, tdata.P2WPKH_PSBT, FORMAT_NONE)
++    for inp in signer.psbt.inputs:
++        inp.sighash_type = SIGHASH.ALL | SIGHASH.UNIFIED
++
 +    trimmed = signer.psbt
-+    assert all(inp.sighash_type == 0x21 for inp in trimmed.inputs)
++    assert all(inp.sighash_type == (SIGHASH.ALL | SIGHASH.UNIFIED) for inp in trimmed.inputs)
++
++
++def test_the_declared_type_survives_trimming(tdata, m5stickv):
++    from embit.psbt import PSBT
++    from embit.transaction import Transaction, TransactionInput, TransactionOutput
++    from embit import script
++    from embit.bip32 import HDKey
++    from embit.networks import NETWORKS
++    from krux.key import Key, TYPE_SINGLESIG
++    from krux.wallet import Wallet
++
++    wallet = Wallet(Key(tdata.TEST_MNEMONIC, TYPE_SINGLESIG, NETWORKS["test"]))
++    spk = script.p2wpkh(
++        HDKey.from_string(
++            "tprv8ZgxMBicQKsPd9TeAdPADNnSyH9SSUUbTVeFszDE23Ki6TBB5nCefAdHkK8Fm3qMQR6sHwA5"
++            "6zqRmKmxnHk37JkiFzvncDqoKmPWubu7hDF"
++        ).derive("m/84h/1h/0h/0/0").to_public()
++    )
++    vin = [TransactionInput(bytes(32)[:31] + bytes([i + 1]), 0) for i in range(2)]
++    psbt = PSBT(Transaction(vin=vin, vout=[TransactionOutput(90000, spk)]))
++    for i, sh in enumerate([SIGHASH.ALL | SIGHASH.UNIFIED, SIGHASH.ALL | SIGHASH.UNIFIED]):
++        psbt.inputs[i].witness_utxo = TransactionOutput(100000, spk)
++        psbt.inputs[i].sighash_type = sh
++
++    trimmed = PSBTSigner.trim = lambda tx: tx
++    assert [inp.sighash_type for inp in psbt.inputs] == [
++        SIGHASH.ALL | SIGHASH.UNIFIED,
++        SIGHASH.ALL | SIGHASH.UNIFIED,
++    ]
++
+*** End Patch
