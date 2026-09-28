@@ -345,20 +345,12 @@ class Home(Page):
             # asked to approve anything. This is a property of the transaction, so
             # walking the user through every seed on the device would hit the same
             # failure each time while telling them their seeds are at fault.
-            self.ctx.display.clear()
-            self.ctx.display.draw_centered_text(
-                t("Warning:")
-                + " "
-                + t("Cannot sign")
-                + "\n\n"
-                + t(
+            self._display_cannot_sign(
+                t(
                     "This transaction could not be signed. "
                     "Nothing was signed and nothing was sent."
-                ),
-                theme.error_color,
-                highlight_prefix=":",
+                )
             )
-            self.ctx.input.wait_for_button()
             return False
         return True
 
@@ -383,7 +375,10 @@ class Home(Page):
                 "This transaction asks for a signature type this device does not "
                 "sign. Signing it would only sign part of it."
             )
+        self._display_cannot_sign(text)
 
+    def _display_cannot_sign(self, text):
+        """One screen saying that nothing was signed, and why"""
         self.ctx.display.clear()
         self.ctx.display.draw_centered_text(
             t("Warning:") + " " + t("Cannot sign") + "\n\n" + text,
