@@ -1453,6 +1453,7 @@ def test_psbt_warnings_taproot_miniscript(mocker, m5stickv, psbt_tdata):
 
 
 def test_sign_wrong_key(mocker, m5stickv, tdata):
+    from krux.pages import MENU_CONTINUE
     from krux.pages.home_pages.home import Home
     from krux.wallet import Wallet
     from krux.input import BUTTON_ENTER, BUTTON_PAGE
@@ -1466,6 +1467,7 @@ def test_sign_wrong_key(mocker, m5stickv, tdata):
         BUTTON_ENTER,  # output 2
         BUTTON_PAGE,  # move to Sign to QR
         BUTTON_ENTER,  # Sign to QR code
+        BUTTON_ENTER,  # "Cannot sign" error
     ]
     wallet = Wallet(tdata.SINGLESIG_12_WORD_KEY)
     ctx = create_ctx(mocker, btn_seq, wallet)
@@ -1483,9 +1485,9 @@ def test_sign_wrong_key(mocker, m5stickv, tdata):
     )
     mocker.spy(home, "display_qr_codes")
 
-    # Wrong key, will raise error "cannot sign"
-    with pytest.raises(ValueError):
-        home.sign_psbt()
+    # Wrong key: signing produces nothing, so the user is told the transaction
+    # could not be signed rather than being shown a traceback
+    assert home.sign_psbt() == MENU_CONTINUE
 
     assert ctx.input.wait_for_button.call_count == len(btn_seq)
     qr_capturer.assert_called_once()
@@ -1495,6 +1497,7 @@ def test_sign_wrong_key(mocker, m5stickv, tdata):
 
 
 def test_sign_review_3_times(mocker, m5stickv, tdata):
+    from krux.pages import MENU_CONTINUE
     from krux.pages.home_pages.home import Home
     from krux.wallet import Wallet
     from krux.input import BUTTON_ENTER, BUTTON_PAGE
@@ -1516,6 +1519,7 @@ def test_sign_review_3_times(mocker, m5stickv, tdata):
         BUTTON_ENTER,  # output 2
         BUTTON_PAGE,  # move to Sign to QR
         BUTTON_ENTER,  # Sign to QR code
+        BUTTON_ENTER,  # "Cannot sign" error
     ]
     wallet = Wallet(tdata.SINGLESIG_12_WORD_KEY)
     ctx = create_ctx(mocker, btn_seq, wallet)
@@ -1533,9 +1537,9 @@ def test_sign_review_3_times(mocker, m5stickv, tdata):
     )
     mocker.spy(home, "display_qr_codes")
 
-    # Wrong key, will raise error "cannot sign"
-    with pytest.raises(ValueError):
-        home.sign_psbt()
+    # Wrong key: the review screens are walked three times and then the device
+    # reports it could not sign, without producing a QR
+    assert home.sign_psbt() == MENU_CONTINUE
 
     assert ctx.input.wait_for_button.call_count == len(btn_seq)
     qr_capturer.assert_called_once()
