@@ -367,23 +367,23 @@ def test_default_and_all_are_the_same_request():
 
 def test_the_label_names_the_algorithm_not_the_bit():
     s = sighash()
-    assert s.sighash_label(UNIFIED_ALL) == "Unified sighash (0x21)"
-    assert s.sighash_label(0x01) == "Standard sighash (0x01)"
-    assert s.sighash_label(0x00) == "Standard sighash (0x00)"
+    assert s.sighash_label(UNIFIED_ALL) == "Unified 0x21"
+    assert s.sighash_label(0x01) == "Standard 0x01"
+    assert s.sighash_label(0x00) == "Standard 0x00"
 
 
 def test_the_label_reaches_the_review_screen(segwit):
     """The user is told, on the screen where they read the amounts"""
     segwit.psbt.inputs[0].sighash_type = UNIFIED_ALL
     messages, _ = segwit.outputs()
-    assert messages[0].endswith("\n\nUnified sighash (0x21)")
+    assert messages[0].endswith("\n\nUnified 0x21")
 
 
 def test_a_host_rewriting_the_opt_in_down_is_visible(segwit):
     """Rewriting 0x21 to 0x01 must not make the line disappear"""
     messages, _ = segwit.outputs()
-    assert messages[0].endswith("\n\nStandard sighash (0x01)")
+    assert messages[0].endswith("\n\nStandard 0x01")
 
     segwit.psbt.inputs[0].sighash_type = UNIFIED_ALL
     messages, _ = segwit.outputs()
-    assert messages[0].endswith("\n\nUnified sighash (0x21)")
+    assert messages[0].endswith("\n\nUnified 0x21")

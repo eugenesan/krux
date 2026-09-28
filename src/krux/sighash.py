@@ -252,12 +252,17 @@ def sighash_label(hash_type):
     message: 0x00 on a taproot input is BIP341's, 0x01 off taproot is BIP143's,
     and calling either of them legacy would name the wrong algorithm on the one
     screen whose purpose is naming it.
+
+    Kept to one line on the narrowest display Krux runs on. The summary is at the
+    screen height there, so a line that wraps costs the one below it: the fee, or
+    this. The word "sighash" is what goes, since the byte beside it is what a
+    coordinator reads back.
     """
     if hash_type & SIGHASH.UNIFIED:
-        label = t("Unified sighash")
+        label = t("Unified")
     else:
-        label = t("Standard sighash")
-    return "%s (0x%02x)" % (label, hash_type)
+        label = t("Standard")
+    return "%s 0x%02x" % (label, hash_type)
 
 
 def signed_hash_types(tx):

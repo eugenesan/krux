@@ -521,7 +521,7 @@ def sighash_line(psbt):
     BIP341's message, and 0x01 off it, which is BIP143's.
     """
     taproot = all(inp.is_taproot for inp in psbt.inputs)
-    return "\n\nStandard sighash (0x%02x)" % (0x00 if taproot else 0x01)
+    return "\n\nStandard 0x%02x" % (0x00 if taproot else 0x01)
 
 
 def with_sighash_line(expected, psbt):

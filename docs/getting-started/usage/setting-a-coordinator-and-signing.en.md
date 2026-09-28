@@ -109,9 +109,9 @@ Once addresses are verified, send a small test amount to your wallet. Test signi
 
 5. Verify the transaction details. The last line of the summary names the
    signature message that is about to be produced, and the signature Krux
-   hands back carries exactly that: `Unified sighash (0x21)` if the
+   hands back carries exactly that: `Unified 0x21` if the
    coordinator asked for Bitcoin Knots' unified opt-in signature hash,
-   `Standard sighash (0x01)` otherwise.
+   `Standard 0x01` otherwise.
 
 6. If correct, press `Sign to QR code`.
 

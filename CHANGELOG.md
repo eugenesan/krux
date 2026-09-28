@@ -5,8 +5,8 @@ Krux can now sign with Bitcoin Knots' unified opt-in signature hash, which is
 one message format for every input type instead of the three in use today. A
 PSBT asking for it is signed, and the review screen names it.
 
-- The last line of the transaction summary reads `Unified sighash (0x21)` or
-  `Standard sighash (0x01)`, and the signature Krux hands back carries exactly
+- The last line of the transaction summary reads `Unified 0x21` or
+  `Standard 0x01`, and the signature Krux hands back carries exactly
   the byte that was named. Both states are labelled, so a coordinator that
   rewrites a request for the unified message down to the standard one cannot
   make the line disappear

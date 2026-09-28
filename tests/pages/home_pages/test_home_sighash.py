@@ -144,7 +144,7 @@ def test_unified_opt_in_is_named_on_screen_and_carried(
     flow.home.sign_psbt()
 
     # named on the summary, where the amounts it commits to are read
-    assert "Unified sighash (0x21)" in flow.summary
+    assert "Unified 0x21" in flow.summary
     # and the signature that left carries the byte it named
     assert hash_types_emitted(flow.captured) == {UNIFIED_ALL}
 
@@ -161,8 +161,75 @@ def test_a_host_rewriting_the_opt_in_down_is_still_named(
     )
     flow.home.sign_psbt()
 
-    assert "Standard sighash (0x01)" in flow.summary
+    assert "Standard 0x01" in flow.summary
     assert hash_types_emitted(flow.captured) == {SIGHASH_ALL}
+
+
+# The PSBT fixtures, each with the wallet that goes with it. The summary is at
+# the screen height on the narrowest device, so every one of these is checked
+# rather than a representative few.
+SUMMARY_FIXTURES = [
+    ("P2PKH_PSBT", "TYPE_SINGLESIG", "P2PKH"),
+    ("P2WPKH_PSBT", "TYPE_SINGLESIG", "P2WPKH"),
+    ("P2SH_P2WPKH_PSBT", "TYPE_SINGLESIG", "P2SH_P2WPKH"),
+    ("P2TR_PSBT", "TYPE_SINGLESIG", "P2TR"),
+    ("P2SH_PSBT", "TYPE_MULTISIG", "P2SH"),
+    ("P2WSH_PSBT", "TYPE_MULTISIG", "P2WSH"),
+    ("P2SH_P2WSH_PSBT", "TYPE_MULTISIG", "P2SH_P2WSH"),
+    ("MINIS_P2WSH_PSBT", "TYPE_MINISCRIPT", "P2WSH"),
+]
+
+
+def summary_for(psbt_tdata, fixture):
+    """The review summary the device would draw for one fixture"""
+    from embit.networks import NETWORKS
+    from krux import key
+    from krux.key import Key
+    from krux.psbt import PSBTSigner
+    from krux.qr import FORMAT_NONE
+    from krux.wallet import Wallet
+
+    _name, policy, script_type = fixture
+    wallet = Wallet(
+        Key(
+            psbt_tdata.TEST_MNEMONIC,
+            getattr(key, policy),
+            NETWORKS["test"],
+            "",
+            0,
+            getattr(key, script_type),
+        )
+    )
+    signer = PSBTSigner(wallet, getattr(psbt_tdata, _name), FORMAT_NONE)
+    for inp in signer.psbt.inputs:
+        inp.sighash_type = UNIFIED_ALL
+    return signer.outputs()[0][0]
+
+
+def test_the_sighash_line_survives_every_display(mocker, multiple_devices, psbt_tdata):
+    """The summary is capped at the screen height, and this line must not be
+    what gets cut. Checked on every supported display against every fixture,
+    with a line of margin demanded: at the limit, one more digit in an amount
+    is enough to drop it silently."""
+    import board
+    from krux.display import TOTAL_LINES, Display
+
+    lcd = board.config["lcd"]
+    mocker.patch(
+        "krux.display.lcd",
+        new=mocker.MagicMock(
+            width=mocker.MagicMock(return_value=lcd["width"]),
+            height=mocker.MagicMock(return_value=lcd["height"]),
+        ),
+    )
+    display = Display()
+
+    for fixture in SUMMARY_FIXTURES:
+        summary = summary_for(psbt_tdata, fixture)
+        needed = len(display.to_lines(summary, max_lines=TOTAL_LINES * 4))
+        assert needed < TOTAL_LINES, (fixture, needed, TOTAL_LINES)
+        lines = display.to_lines(summary)
+        assert any("Unified 0x21" in line for line in lines), (fixture, lines)
 
 
 def test_a_non_standard_request_is_refused_before_review(
