@@ -107,7 +107,11 @@ Once addresses are verified, send a small test amount to your wallet. Test signi
 
 4. Scan the animated QR code.
 
-5. Verify the transaction details.
+5. Verify the transaction details. The last line of the summary names the
+   signature message that is about to be produced, and the signature Krux
+   hands back carries exactly that: `Unified 0x21` if the
+   coordinator asked for Bitcoin Knots' unified opt-in signature hash,
+   `Standard 0x01` otherwise.
 
 6. If correct, press `Sign to QR code`.
 
@@ -116,6 +120,38 @@ Once addresses are verified, send a small test amount to your wallet. Test signi
 Alternatively, you can use an SD card:
 
 Save the transaction as a file on an SD card. On Krux, go to **Sign -> PSBT -> Load from SD card** and `Sign to SD card`. Load the signed transaction on the coordinator and broadcast it.
+
+#### Signature messages Krux will sign
+
+A PSBT input may declare a hash type, and Krux decides for itself which ones
+it will ask for. It signs, and names on screen, only these:
+
+| Hash type | Meaning |
+| --- | --- |
+| *(nothing)* | The default for the script type |
+| `0x00` SIGHASH_DEFAULT | Taproot; commits to every input and output |
+| `0x01` SIGHASH_ALL | Commits to every input and output |
+| `0x21` SIGHASH_ALL&#124;SIGHASH_UNIFIED | The unified opt-in, one message format for every script type |
+
+Anything else is refused rather than signed, because Krux would have no way to
+tell you what it was committing to. `SIGHASH_NONE` signs no outputs at all, so
+its signature lets anyone redirect what the input spends; `SIGHASH_SINGLE` with
+no output at the input's index signs a constant that is reusable against any
+transaction spending that key; and `SIGHASH_ANYONECANPAY` leaves the other
+inputs uncommitted. None of these are shown to a signer, so a transaction
+asking for one would otherwise review as an ordinary send.
+
+When a PSBT's inputs do not reduce to a single type Krux will describe, it
+refuses to sign and says which of the two situations applies: part of the
+transaction would go unsigned, or every part would be signed but with types no
+one label covers. Nothing is signed and nothing is sent in either case.
+
+The unified opt-in is specified in `doc/unified-sighash.md` in Bitcoin Knots.
+It commits to the amount and scriptPubKey of every input, which is what closes
+CVE-2020-14199 for those inputs, and its message is distinct from every
+existing one, so an opted-in transaction cannot be replayed onto a chain that
+does not implement it. A signature carrying it is only valid on a chain that
+does, so the coordinator must be running Bitcoin Knots.
 
 ### Messages
 
