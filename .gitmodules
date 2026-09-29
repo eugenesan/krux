@@ -1,6 +1,6 @@
 [submodule "embit"]
 	path = vendor/embit
-	url = ../../privkeyio/embit
+	url = ../../eugenesan/embit
 [submodule "firmware/Kboot"]
 	path = firmware/Kboot
 	url = ../../selfcustody/Kboot
