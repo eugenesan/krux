@@ -1,3 +1,34 @@
+# Changelog (unreleased)
+
+### Unified opt-in signature hash
+Krux can now sign with Bitcoin Knots' unified opt-in signature hash, which is
+one message format for every input type instead of the three in use today. A
+PSBT asking for it is signed, and the review screen names it.
+
+- The last line of the transaction summary reads `Unified 0x21` or
+  `Standard 0x01`, and the signature Krux hands back carries exactly
+  the byte that was named. Both states are labelled, so a coordinator that
+  rewrites a request for the unified message down to the standard one cannot
+  make the line disappear
+- The message commits to the amount and scriptPubKey of every input, not just
+  the one being signed, so a coordinator can no longer lie about one input's
+  value and have the signature survive in the real transaction. That is
+  CVE-2020-14199, and it also removes the per-input reserialization, which is
+  CVE-2013-2292
+- The hash type a PSBT input declares is an allowlist rather than a blocklist.
+  Previously any value other than unset, `SIGHASH_ALL` or `SIGHASH_DEFAULT` was
+  refused with an error message naming the byte; now the two situations a
+  transaction can be refused for each have their own warning, saying whether
+  part of the transaction would go unsigned or whether every part would be
+  signed but with types no one label can describe
+- Embit is updated to the fork carrying the algorithm, rebased onto the embit
+  this repository already vendored so that nothing upstream is lost
+
+### Security Fixes
+- Camera entropy: fix a heap buffer overflow in the Shannon entropy module. Only the Maix Bit could trigger it, a device discontinued in 25.09.0 with no known users; every other device feeds the module a frame that fits. The module copied the whole frame into a fixed 320x240 RGB565 (153,600 byte) scratch buffer, so the Maix Bit's larger CIF frames (352x288 RGB565, 202,752 bytes) wrote 49,152 bytes past the end. The scratch copy has been removed entirely, the read length is now capped and rounded to whole pixels, and the CIF path is gone along with the Maix Bit
+- PSBT: stricter checks on the calculation of fee shown on screen
+- PSBT: warn before signing when the wallet coordinator did not send enough data to confirm those amounts
+
 # Changelog 26.08.0 - August 2026
 
 ### Security Fixes
