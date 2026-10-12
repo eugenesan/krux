@@ -62,8 +62,8 @@ INS_RESET_SECRET = 0xA5
 INS_LIST_HEADERS = 0xA6
 INS_SEEDKEEPER_STATUS = 0xA7
 
-# The applet's AID, as the card spells it: "SeedKeepe", ten bytes, no trailing
-# 'r'. Not our typo to fix.
+# The applet's AID: the ASCII "SeedKeeper", ten bytes, one byte per
+# character.
 SEEDKEEPER_AID = [0x53, 0x65, 0x65, 0x64, 0x4B, 0x65, 0x65, 0x70, 0x65, 0x72]
 
 SELECT_APDU = [0x00, 0xA4, 0x04, 0x00]
