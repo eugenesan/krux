@@ -28,6 +28,7 @@ from .. import (
     MENU_CONTINUE,
 )
 from ...kboard import kboard
+from ...seedkeeper import available as seedkeeper_available
 
 
 class MnemonicsView(Page):
@@ -35,15 +36,26 @@ class MnemonicsView(Page):
 
     def mnemonic(self):
         """Menu with export mnemonic formats"""
-        submenu = Menu(
-            self.ctx,
-            [
-                (t("QR Code"), self.qr_code_backup),
-                (t("Encrypted"), self.encrypt_mnemonic_menu),
-                (t("Other Formats"), self.other_backup_formats),
-            ],
-        )
+        items = [
+            (t("QR Code"), self.qr_code_backup),
+            (t("Encrypted"), self.encrypt_mnemonic_menu),
+            (t("Other Formats"), self.other_backup_formats),
+        ]
+        # A card is a backup destination like any other, and only a build that
+        # can reach a smartcard has anywhere to put it.
+        if seedkeeper_available():
+            items.insert(0, (t("SeedKeeper Card"), self.seedkeeper_card))
+        submenu = Menu(self.ctx, items)
         submenu.run_loop()
+        return MENU_CONTINUE
+
+    def seedkeeper_card(self):
+        """Handler for the 'SeedKeeper Card' menu item"""
+        from ..seedkeeper import SeedKeeperPage
+
+        # No load_key_fn: a wallet is already loaded here, so the page offers
+        # to write the seed out rather than to read one in.
+        SeedKeeperPage(self.ctx).run()
         return MENU_CONTINUE
 
     def qr_code_backup(self):

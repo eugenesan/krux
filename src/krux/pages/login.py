@@ -49,6 +49,7 @@ from ..key import (
 )
 from ..krux_settings import t
 from ..kboard import kboard
+from ..seedkeeper import available as seedkeeper_available
 
 DOUBLE_MNEMONICS_MAX_TRIES = 200
 MASK256 = (1 << 256) - 1
@@ -72,6 +73,11 @@ class Login(MnemonicLoader):
             (t("Tools"), self.tools),
             (t("About"), self.about),
         ]
+        # SeedKeeper needs a smartcard to read from. Builds without one -- the
+        # K210 firmware has no NFC peripheral -- are left without the item
+        # rather than given one that could only ever report no reader.
+        if seedkeeper_available():
+            login_menu_items.append((t("SeedKeeper Card"), self.seedkeeper))
         if ctx.power_manager is not None:
             kboard.has_battery = ctx.power_manager.has_battery()
         if kboard.has_battery:
@@ -397,6 +403,16 @@ class Login(MnemonicLoader):
 
         settings_page = SettingsPage(self.ctx)
         return settings_page.settings()
+
+    def seedkeeper(self):
+        """Handler for the 'SeedKeeper Card' menu item"""
+        from .seedkeeper import SeedKeeperPage
+
+        # Words from the card go through the same funnel a typed mnemonic
+        # does, so they meet the editor, the checksum check and the passphrase
+        # prompt exactly as if they had been keyed in by hand.
+        SeedKeeperPage(self.ctx, self._load_key_from_words).run()
+        return MENU_CONTINUE
 
     def about(self):
         """Handler for the 'about' menu item"""
