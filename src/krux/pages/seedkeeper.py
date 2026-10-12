@@ -142,6 +142,14 @@ class SeedKeeperPage(Page):
         try:
             card = sk.SeedKeeper(transport)
             card.select()
+        except sk.SeedKeeperError as exc:
+            self.flash_error(
+                t("No SeedKeeper applet\nInstall it first.")
+                if exc.sw == sk.SW_APPLET_NOT_FOUND
+                else "%s\n%s" % (t("Card error"), exc)
+            )
+            return None
+        try:
             status = card.card_status()
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))

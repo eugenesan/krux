@@ -219,6 +219,7 @@ translation_array = [
     "检测到新固件.",
     "否",
     "无 Passphrase ",
+    "没有 SeedKeeper 小程序\n请先安装",
     "没有读卡器",
     "卡片上没有机密",
     "卡片上没有种子",

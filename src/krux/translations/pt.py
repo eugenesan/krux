@@ -219,6 +219,7 @@ translation_array = [
     "Novo firmware detectado.",
     "Não",
     "Sem Senha",
+    "Sem applet SeedKeeper\nInstale-o primeiro.",
     "Sem leitor de cartão",
     "Nenhum segredo no cartão",
     "Nenhuma semente no cartão",

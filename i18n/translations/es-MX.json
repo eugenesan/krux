@@ -197,6 +197,7 @@
     "New firmware detected.": "Nuevo firmware detectado.",
     "No": "No",
     "No Passphrase": "Sin Passphrase",
+    "No SeedKeeper applet\\nInstall it first.": "Sin applet SeedKeeper\nInstálalo primero.",
     "No card reader": "Sin lector de tarjetas",
     "No secrets on card": "No hay secretos en la tarjeta",
     "No seeds on card": "No hay semillas en la tarjeta",

@@ -197,6 +197,7 @@
     "New firmware detected.": "Обнаружена новая прошивка.",
     "No": "Нет",
     "No Passphrase": "Нет Фраза-пароль",
+    "No SeedKeeper applet\\nInstall it first.": "Нет апплета SeedKeeper\nСначала установите его.",
     "No card reader": "Нет устройства чтения карт",
     "No secrets on card": "На карте нет секретов",
     "No seeds on card": "На карте нет сидов",

@@ -197,6 +197,7 @@
     "New firmware detected.": "检测到新固件.",
     "No": "否",
     "No Passphrase": "无 Passphrase ",
+    "No SeedKeeper applet\\nInstall it first.": "没有 SeedKeeper 小程序\n请先安装",
     "No card reader": "没有读卡器",
     "No secrets on card": "卡片上没有机密",
     "No seeds on card": "卡片上没有种子",

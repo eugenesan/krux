@@ -82,6 +82,13 @@ SUBTYPE_BIP39 = 0x01
 
 EXPORT_PLAINTEXT_ALLOWED = 0x01
 
+# SELECT by AID, on a card that does not carry the applet. This one code is
+# worth naming: it means the card was never provisioned, which is a different
+# problem with a different remedy than any other failure in this module, and
+# someone who has just flashed a blank card needs to be told so rather than
+# shown a status word.
+SW_APPLET_NOT_FOUND = 0x6A82
+
 PIN_MIN_SIZE = 4
 PIN_MAX_SIZE = 16
 MAX_LABEL_SIZE = 64

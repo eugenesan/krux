@@ -219,6 +219,7 @@ translation_array = [
     "Nouveau micrologiciel détecté.",
     "Non",
     "Pas de phrase secrète",
+    "Pas d'applet SeedKeeper\nInstallez-la d'abord.",
     "Aucun lecteur de carte",
     "Aucun secret sur la carte",
     "Aucune graine sur la carte",

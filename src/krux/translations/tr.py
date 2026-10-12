@@ -219,6 +219,7 @@ translation_array = [
     "Yeni donanım yazılımı tespit edildi.",
     "Hayır",
     "Parola Yok",
+    "SeedKeeper applet yok\nÖnce kurun.",
     "Kart okuyucu yok",
     "Kartta sır yok",
     "Kartta tohum yok",

@@ -219,6 +219,7 @@ translation_array = [
     "Phát hiện phần sụn mới.",
     "Không",
     "Không có cụm mật khẩu",
+    "Không có applet SeedKeeper\nHãy cài đặt trước.",
     "Không có đầu đọc thẻ",
     "Thẻ không có bí mật nào",
     "Thẻ không có seed nào",

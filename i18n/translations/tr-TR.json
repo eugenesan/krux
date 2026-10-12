@@ -197,6 +197,7 @@
     "New firmware detected.": "Yeni donanım yazılımı tespit edildi.",
     "No": "Hayır",
     "No Passphrase": "Parola Yok",
+    "No SeedKeeper applet\\nInstall it first.": "SeedKeeper applet yok\nÖnce kurun.",
     "No card reader": "Kart okuyucu yok",
     "No secrets on card": "Kartta sır yok",
     "No seeds on card": "Kartta tohum yok",

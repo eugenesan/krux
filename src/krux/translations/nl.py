@@ -219,6 +219,7 @@ translation_array = [
     "Nieuwe firmware gevonden.",
     "Nee",
     "Geen wachtwoordzin",
+    "Geen SeedKeeper-applet\nInstalleer deze eerst.",
     "Geen kaartlezer",
     "Geen geheimen op de kaart",
     "Geen seeds op de kaart",

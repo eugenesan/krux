@@ -219,6 +219,7 @@ translation_array = [
     "Neue Firmware erkannt.",
     "Nein",
     "Keine Passphrase",
+    "Kein SeedKeeper-Applet\nZuerst installieren.",
     "Kein Kartenleser",
     "Keine Geheimnisse auf der Karte",
     "Keine Seeds auf der Karte",

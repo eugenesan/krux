@@ -197,6 +197,7 @@
     "New firmware detected.": "Nouveau micrologiciel détecté.",
     "No": "Non",
     "No Passphrase": "Pas de phrase secrète",
+    "No SeedKeeper applet\\nInstall it first.": "Pas d'applet SeedKeeper\nInstallez-la d'abord.",
     "No card reader": "Aucun lecteur de carte",
     "No secrets on card": "Aucun secret sur la carte",
     "No seeds on card": "Aucune graine sur la carte",

@@ -21,6 +21,7 @@ from krux.seedkeeper import (
     CLA,
     SEEDKEEPER_AID,
     SUBTYPE_BIP39,
+    SW_APPLET_NOT_FOUND,
     TYPE_MASTERSEED,
     SeedKeeper,
     SeedKeeperError,
@@ -53,6 +54,9 @@ class FakeCard:
     def __init__(self, setup_done=True, applet_minor=2):
         self.setup_done = setup_done
         self.applet_minor = applet_minor
+        # Whether the card carries the SeedKeeper applet at all. A blank
+        # JavaCard does not, and answers SELECT by AID with 6A82.
+        self.has_applet = True
         # A secret's type byte is the applet's to assign: the client never
         # sends it, only the tail of the header from export_rights onwards.
         self.default_type = 0x10  # Masterseed
@@ -79,7 +83,9 @@ class FakeCard:
         cla, ins, p1, p2 = apdu[0], apdu[1], apdu[2], apdu[3]
         if ins == 0xA4:
             # SELECT carries its own class byte, not the Satochip one
-            return self._ok()
+            if self.has_applet:
+                return self._ok()
+            return self._fail(0x6A82)
         if cla != CLA:
             return self._fail(0x6E00)
         if ins == 0x3C:
@@ -301,6 +307,16 @@ class TestConnection:
     def test_select_uses_the_applets_own_aid(self, keeper, card):
         keeper.select()
         assert card.apdus[-1][5:] == bytes(SEEDKEEPER_AID)
+
+    def test_a_card_without_the_applet_says_so_by_status_word(self, card):
+        # A blank JavaCard: SELECT by AID answers 6A82, and the page turns
+        # that one code into a sentence. Pinning it here stops the constant
+        # drifting away from what the card actually returns.
+        card.has_applet = False
+        with pytest.raises(SeedKeeperError) as excinfo:
+            SeedKeeper(card).select()
+        assert excinfo.value.sw == 0x6A82
+        assert excinfo.value.sw == SW_APPLET_NOT_FOUND
 
     def test_a_wrong_class_is_a_seedkeeper_error(self):
         class WrongClass:

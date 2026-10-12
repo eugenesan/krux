@@ -197,6 +197,7 @@
     "New firmware detected.": "새로운 펌웨어가 감지되었습니다.",
     "No": "아니요",
     "No Passphrase": "패스프레이즈 없음",
+    "No SeedKeeper applet\\nInstall it first.": "SeedKeeper 애플릿이 없습니다\n먼저 설치하세요.",
     "No card reader": "카드 리더기 없음",
     "No secrets on card": "카드에 비밀 데이터가 없습니다",
     "No seeds on card": "카드에 시드가 없습니다",

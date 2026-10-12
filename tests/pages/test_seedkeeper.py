@@ -192,6 +192,17 @@ class TestMenuContents:
 
 
 class TestLoadSeed:
+    def test_a_card_with_no_applet_says_so_rather_than_quoting_a_status_word(
+        self, reader, make_page, keypad, errors
+    ):
+        # A blank JavaCard answers SELECT by AID with 6A82. It is the one
+        # failure here with a documented remedy, so it gets said in words.
+        reader.has_applet = False
+        page, loaded = make_page()
+        page.load_seed()
+        assert errors == ["No SeedKeeper applet\nInstall it first."]
+        assert loaded == []
+
     def test_the_user_is_told_to_tap_before_the_reader_waits(
         self, reader, make_page, keypad
     ):
