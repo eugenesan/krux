@@ -115,10 +115,19 @@ class Login(MnemonicLoader):
         dice_entropy = DiceEntropy(self.ctx, d_20)
         captured_entropy = dice_entropy.new_key()
         if captured_entropy is not None:
-            from embit.bip39 import mnemonic_from_bytes
+            try:
+                from embit.bip39 import mnemonic_from_bytes
 
-            words = mnemonic_from_bytes(captured_entropy).split()
-            return self._load_key_from_words(words, new=True)
+                words = mnemonic_from_bytes(captured_entropy).split()
+                return self._load_key_from_words(words, new=True)
+            except Exception as e:
+                import sys
+                print("new_key_from_dice error:", repr(e))
+                try:
+                    sys.print_exception(e)
+                except Exception:
+                    pass
+                return MENU_CONTINUE
         return MENU_CONTINUE
 
     def new_key_from_snapshot(self):
