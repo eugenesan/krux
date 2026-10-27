@@ -14,6 +14,38 @@ except ImportError:
     sha512 = None  # noqa: F401
 
 
+class _FastSHA512:
+    """sha512 backed by crypto_fast (mbedtls), with the hash-object API."""
+    digest_size = 64
+    block_size = 128
+
+    def __init__(self, data=b""):
+        self._data = bytearray()
+        if data:
+            self.update(data)
+
+    def update(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        self._data.extend(data)
+
+    def digest(self):
+        if _cf is not None:
+            return _cf.sha512(bytes(self._data))
+        return sha512(bytes(self._data)).digest()
+
+    def hexdigest(self):
+        return self.digest().hex()
+
+    def copy(self):
+        other = _FastSHA512()
+        other._data = bytearray(self._data)
+        return other
+
+
+if _cf is not None:
+    sha512 = _FastSHA512
+
 def pbkdf2_hmac_sha256(password, salt, iterations, dklen=32):
     """PBKDF2-HMAC-SHA256, C-backed when available."""
     if isinstance(password, str):
@@ -227,18 +259,18 @@ try:
             setattr(_hl, _name, getattr(_uh, _name))
 
     if _cf is not None:
-        _hl.sha512 = _cf.sha512
-        _hl.sha256 = _cf.sha256
+        _hl.sha512 = _FastSHA512
+        _hl.sha256 = _uh.sha256
         _hl.pbkdf2_hmac = _cf.pbkdf2_hmac
     else:
         _hl.sha512 = sha512
         _hl.pbkdf2_hmac = pbkdf2_hmac
 
     def _new(name, data=b""):
-        if _cf is not None and name == "sha512":
-            return _cf.sha512(data)
+        if name == "sha512":
+            return _FastSHA512(data) if _cf is not None else sha512(data)
         if _cf is not None and name == "sha256":
-            return _cf.sha256(data)
+            return _uh.sha256(data)
         if name == "sha512":
             return sha512(data)
         if name == "sha256":
