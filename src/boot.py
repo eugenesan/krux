@@ -25,6 +25,11 @@ import sys
 import time
 import gc
 import os
+# ensure hashlib is patched (sha512 + pbkdf2_hmac) before embit loads
+try:
+    import uhashlib_hw  # noqa: F401
+except Exception:
+    pass
 
 from krux.power import power_manager
 
