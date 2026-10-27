@@ -13,6 +13,11 @@ try:
 except ImportError:
     sha512 = None  # noqa: F401
 
+try:
+    import crypto_fast as _cf
+except Exception:
+    _cf = None
+
 
 class _FastSHA512:
     """sha512 backed by crypto_fast (mbedtls), with the hash-object API."""
