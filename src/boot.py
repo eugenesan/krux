@@ -38,6 +38,11 @@ def draw_splash():
     display.initialize_lcd()
     display.clear()
     display.draw_centered_text(SPLASH)
+    try:
+        import lcd
+        lcd.flush()
+    except Exception:
+        pass
 
 
 def check_for_updates():

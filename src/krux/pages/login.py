@@ -435,12 +435,21 @@ class Login(MnemonicLoader):
         if kboard.is_cube:
             offset_x = self.ctx.display.width() // 4
             width = self.ctx.display.width() // 2
-        self.display_qr_codes(
-            title,
-            FORMAT_NONE,
-            msg,
-            offset_x=offset_x,
-            width=width,
-            highlight_prefix=":",
-        )
+        try:
+            self.display_qr_codes(
+                title,
+                FORMAT_NONE,
+                msg,
+                offset_x=offset_x,
+                width=width,
+                highlight_prefix=":",
+            )
+        except Exception as e:
+            import sys
+            print("about error:", repr(e), file=sys.stderr)
+            try:
+                import traceback
+                traceback.print_exc()
+            except Exception:
+                pass
         return MENU_CONTINUE

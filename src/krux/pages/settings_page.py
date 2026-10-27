@@ -420,9 +420,24 @@ class SettingsPage(Page):
                     level = 1
                 if level > 5:
                     level = 5
-                pmu = getattr(self.ctx.power_manager, "pmu", None)
-                if pmu is not None:
-                    pmu.set_screen_brightness(7 + level)
+                # the phone: write the level straight to the backlight sysfs
+                try:
+                    base = "/sys/class/backlight/lm3630"
+                    maximum = 255
+                    try:
+                        with open(base + "/max_brightness") as f:
+                            maximum = int(f.read().strip())
+                    except (OSError, ValueError):
+                        pass
+                    if maximum <= 0:
+                        maximum = 255
+                    value = level * maximum // 5
+                    if value < 1:
+                        value = 1
+                    with open(base + "/brightness", "w") as f:
+                        f.write(str(value))
+                except OSError:
+                    pass
         elif setting.attr == "flipped_x":
             if new_category is not None:
                 self.ctx.display.flipped_x_coordinates = new_category
