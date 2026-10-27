@@ -33,7 +33,7 @@ except Exception:
 
 from krux.power import power_manager
 
-MIN_SPLASH_WAIT_TIME = 1000
+MIN_SPLASH_WAIT_TIME = 3000
 
 
 def draw_splash():
@@ -156,11 +156,12 @@ ctx.power_manager = power_manager
 auto_shutdown.add_ctx(ctx)
 
 
-# If importing happened too fast, sleep the difference so the logo
-# will be shown
+# Keep the splash on screen long enough to be seen
 postimport_ticks = time.ticks_ms()
-if preimport_ticks + MIN_SPLASH_WAIT_TIME > postimport_ticks:
-    time.sleep_ms(preimport_ticks + MIN_SPLASH_WAIT_TIME - postimport_ticks)
+wait = preimport_ticks + MIN_SPLASH_WAIT_TIME - postimport_ticks
+if wait < 2000:
+    wait = 2000
+time.sleep_ms(wait)
 
 if not tc_code_verification(ctx):
     power_manager.shutdown()
