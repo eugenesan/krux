@@ -134,8 +134,8 @@ class _Keys:
     def __init__(self):
         pins = board.config["krux"]["pins"]
         self.enter = _Key(pins["BUTTON_A"], evdev.KEY_POWER)
-        self.page = _Key(pins["BUTTON_B"], evdev.KEY_VOLUME_UP)
-        self.page_prev = _Key(pins["BUTTON_C"], evdev.KEY_VOLUME_DOWN)
+        self.page = _Key(pins["BUTTON_B"], evdev.KEY_VOLUME_DOWN)
+        self.page_prev = _Key(pins["BUTTON_C"], evdev.KEY_VOLUME_UP)
 
 
 buttons_control = _Keys()

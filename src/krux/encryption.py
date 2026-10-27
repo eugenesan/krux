@@ -67,7 +67,8 @@ class MnemonicStorage:
         def stretch_key(key, salt, iterations):
             key = key if isinstance(key, bytes) else key.encode()
             salt = salt if isinstance(salt, bytes) else salt.encode()
-            return hashlib.pbkdf2_hmac("sha256", key, salt, iterations)
+            import uhashlib_hw
+            return uhashlib_hw.pbkdf2_hmac_sha256(key, salt, iterations)
 
         if not (isinstance(iterations, int) and isinstance(payload, bytes)):
             return None

@@ -410,6 +410,19 @@ class SettingsPage(Page):
                 self.ctx.display.gpio_backlight_ctrl(new_category)
             elif kboard.is_m5stickv:
                 self.ctx.display.set_pmu_backlight(new_category)
+            else:
+                # the phone: the backlight is a sysfs file (lm3630)
+                try:
+                    level = int(new_category)
+                except (TypeError, ValueError):
+                    level = 3
+                if level < 1:
+                    level = 1
+                if level > 5:
+                    level = 5
+                pmu = getattr(self.ctx.power_manager, "pmu", None)
+                if pmu is not None:
+                    pmu.set_screen_brightness(7 + level)
         elif setting.attr == "flipped_x":
             if new_category is not None:
                 self.ctx.display.flipped_x_coordinates = new_category
