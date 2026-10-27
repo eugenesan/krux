@@ -194,14 +194,38 @@ def pbkdf2_hmac(hash_name, password, salt, iterations, dklen=None):
         out += bytes(t)
     return out[:dklen]
 
-
-# patch hashlib so embit (which calls hashlib.pbkdf2_hmac / hashlib.sha512)
-# keeps working on MicroPython
+# ---------------------------------------------------------------------------
+# Inject a replacement `hashlib` module into sys.modules, because MicroPython's
+# builtin hashlib is immutable (setattr raises).  embit imports `hashlib` and
+# needs sha512 + pbkdf2_hmac, which the builtin lacks.
+# ---------------------------------------------------------------------------
 try:
-    import hashlib as _hashlib
-    _hashlib.sha512 = sha512
-    _hashlib.pbkdf2_hmac = pbkdf2_hmac
-    # also expose the convenience wrappers embit may use
-    _hashlib.sha256 = sha256
+    import sys as _sys
+    import uhashlib as _uh
+
+    class _HashLib:
+        pass
+
+    _hl = _HashLib()
+    for _name in ("md5", "sha1", "sha256"):
+        if hasattr(_uh, _name):
+            setattr(_hl, _name, getattr(_uh, _name))
+
+    _hl.sha512 = sha512
+    _hl.pbkdf2_hmac = pbkdf2_hmac
+
+    def _new(name, data=b""):
+        if name == "sha512":
+            return sha512(data)
+        if name == "sha256":
+            return _uh.sha256(data)
+        if name == "sha1":
+            return _uh.sha1(data)
+        if name == "md5":
+            return _uh.md5(data)
+        raise ValueError(name)
+
+    _hl.new = _new
+    _sys.modules["hashlib"] = _hl
 except Exception:
     pass
