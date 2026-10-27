@@ -469,7 +469,14 @@ class IsoDepTransport:
         return self.connected
 
     def transmit(self, apdu):
-        """Send one APDU; hand back (data, sw1, sw2) unexamined."""
+        """Send one APDU; hand back (data, sw1, sw2) unexamined.
+
+        A transport that was never connected connects itself on the first
+        command, so a caller that never mentions a card still gets one
+        (the mobile app's mock behaves the same way).
+        """
+        if not self.connected:
+            self.connect()
         if not self.connected:
             raise NfcError("not connected")
         return self._data(bytes(apdu))
