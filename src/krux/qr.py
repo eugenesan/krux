@@ -254,6 +254,8 @@ def to_qr_codes(data, max_width, qr_format):
     the max_width constraint
     """
     if qr_format == FORMAT_NONE:
+        if isinstance(data, str):
+            data = data.encode("ascii", "replace")
         code = qrcode.encode(data)
         yield (code, 1)
     else:
