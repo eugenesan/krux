@@ -1,27 +1,42 @@
-# The MIT License (MIT)
+"""
+wdt -- the watchdog, on the hammerhead.
 
-# Copyright (c) 2021-2024 Krux contributors
+The firmware's own wdt.py asks MaixPy's `machine.WDT` for a watchdog
+and feeds it while it works, so that a hang restarts the board.
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+The port does not arm the kernel's watchdog (/dev/watchdog) for now:
+on Linux, closing the watchdog without the "magic close" *reboots* the
+device, and a firmware that exits normally (or is killed) would then
+restart the phone instead of coming back to the prompt.  So the port's
+watchdog only keeps the bookkeeping: the firmware's flow is unchanged,
+nothing is armed.
 
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
+When it is wanted, the kernel's device is the one to use:
 
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-import machine
+    fd = open("/dev/watchdog", "w")
+    fd.write(b"")            # feed
+    fd.write(b"V")           # magic close: do not reboot
+"""
 
 RESET_TIMEOUT = 30000
 
-# Create a watchdog timer that resets the device if not fed for 30s
-wdt = machine.WDT(id=0, timeout=RESET_TIMEOUT)
+
+class _Watchdog:
+    """The watchdog: nothing is armed, but the firmware's flow is the
+    same."""
+
+    def __init__(self, timeout=RESET_TIMEOUT):
+        self.timeout = timeout
+        self.fd = None
+
+    def feed(self):
+        """Keep the watchdog happy."""
+        if self.fd is None:
+            return
+        try:
+            self.fd.write(b"")
+        except OSError:
+            pass
+
+
+wdt = _Watchdog(RESET_TIMEOUT)

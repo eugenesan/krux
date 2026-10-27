@@ -27,6 +27,10 @@ class KBoard:
     """A simple class to organize and cache board related information"""
 
     def __init__(self):
+        # The port: the hammerhead is not one of the K210 boards, but
+        # it has a display whose backlight can be dimmed, so it is
+        # given the same flags as the boards that can.
+        self.is_hammerhead = board.config["type"] == "hammerhead"
         self.is_amigo = board.config["type"] == "amigo"
         self.is_cube = board.config["type"] == "cube"
         self.is_embed_fire = board.config["type"] == "embed_fire"
@@ -38,14 +42,17 @@ class KBoard:
         self.has_battery = False  # Variable to be set in Login Page
         self.has_touchscreen = board.config["krux"]["display"].get("touch", False)
         self.has_minimal_display = self.is_m5stickv or self.is_cube
-        self.can_control_brightness = any(
+        self.can_control_brightness = self.is_hammerhead or any(
             [self.is_cube, self.is_m5stickv, self.is_wonder_mv, self.is_wonder_k]
         )
-        self.can_flip_orientation = (
+        self.can_flip_orientation = self.is_hammerhead or (
             self.is_yahboom or self.is_wonder_mv or self.is_wonder_k
         )
         self.has_light = "LED_W" in board.config["krux"]["pins"]
-        self.has_backlight = "BACKLIGHT" in board.config["krux"]["pins"]
+        # The port: the firmware's display.py would dim the backlight
+        # with a PWM on a pin; the hammerhead's backlight is a sysfs
+        # file, so the firmware leaves it alone and the port does it.
+        self.has_backlight = False
         self.has_encoder = "ENCODER" in board.config["krux"]["pins"]
         self.need_release_filter = self.has_encoder or self.is_cube
 
