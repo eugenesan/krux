@@ -96,7 +96,7 @@ class sha512:
         self._len += len(data)
         while len(self._buf) >= 128:
             self._process(self._buf[:128])
-            del self._buf[:128]
+            self._buf = self._buf[128:]
 
     def _process(self, chunk):
         w = [0] * 80
