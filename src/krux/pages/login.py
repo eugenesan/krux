@@ -446,10 +446,9 @@ class Login(MnemonicLoader):
             )
         except Exception as e:
             import sys
-            print("about error:", repr(e), file=sys.stderr)
+            print("about error:", repr(e))
             try:
-                import traceback
-                traceback.print_exc()
+                sys.print_exception(e)
             except Exception:
                 pass
         return MENU_CONTINUE
