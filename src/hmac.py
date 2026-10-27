@@ -11,6 +11,10 @@ and `HMAC(key, msg=None, digestmod=None)`, with `update`, `digest`,
 """
 
 import hashlib
+try:
+    import crypto_fast as _cf
+except Exception:
+    _cf = None
 
 
 def _digest_size(digestmod):
@@ -28,9 +32,9 @@ class HMAC:
             try:
                 import uhashlib_hw
                 if name == "sha512":
-                    digestmod = uhashlib_hw.sha512
+                    digestmod = _cf.sha512 if _cf is not None else (uhashlib_hw.sha512 if hasattr(uhashlib_hw, "sha512") else None)
                 elif name == "sha256":
-                    digestmod = uhashlib_hw.sha256 if hasattr(uhashlib_hw, "sha256") else hashlib.sha256
+                    digestmod = _cf.sha256 if _cf is not None else (uhashlib_hw.sha256 if hasattr(uhashlib_hw, "sha256") else hashlib.sha256)
                 elif name == "sha1":
                     digestmod = hashlib.sha1
                 else:

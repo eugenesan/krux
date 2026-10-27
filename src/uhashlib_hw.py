@@ -15,11 +15,13 @@ except ImportError:
 
 
 def pbkdf2_hmac_sha256(password, salt, iterations, dklen=32):
-    """PBKDF2-HMAC-SHA256, pure Python on top of uhashlib."""
+    """PBKDF2-HMAC-SHA256, C-backed when available."""
     if isinstance(password, str):
         password = password.encode()
     if isinstance(salt, str):
         salt = salt.encode()
+    if _cf is not None:
+        return _cf.pbkdf2_hmac("sha256", password, salt, iterations, dklen)
     import hmac as _hmac
 
     def _prf(p, s):
@@ -46,6 +48,10 @@ def pbkdf2_hmac_sha256(password, salt, iterations, dklen=32):
 # ---------------------------------------------------------------------------
 
 import struct as _struct
+try:
+    import crypto_fast as _cf
+except Exception:
+    _cf = None
 
 
 def _rotr64(x, n):
@@ -220,10 +226,19 @@ try:
         if hasattr(_uh, _name):
             setattr(_hl, _name, getattr(_uh, _name))
 
-    _hl.sha512 = sha512
-    _hl.pbkdf2_hmac = pbkdf2_hmac
+    if _cf is not None:
+        _hl.sha512 = _cf.sha512
+        _hl.sha256 = _cf.sha256
+        _hl.pbkdf2_hmac = _cf.pbkdf2_hmac
+    else:
+        _hl.sha512 = sha512
+        _hl.pbkdf2_hmac = pbkdf2_hmac
 
     def _new(name, data=b""):
+        if _cf is not None and name == "sha512":
+            return _cf.sha512(data)
+        if _cf is not None and name == "sha256":
+            return _cf.sha256(data)
         if name == "sha512":
             return sha512(data)
         if name == "sha256":
