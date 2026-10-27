@@ -142,7 +142,7 @@ POLL_WINDOW_MS = 8000
 SETTLE_S = 0.3
 
 # set to 1 to print every packet that goes to and from the chip
-DEBUG = 0
+DEBUG = 1
 
 
 def _dbg(what, data):
