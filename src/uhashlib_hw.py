@@ -77,6 +77,8 @@ _K512 = [
 
 
 class sha512:
+    digest_size = 64
+    block_size = 128
     def __init__(self, data=b""):
         self._h = [
             0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
