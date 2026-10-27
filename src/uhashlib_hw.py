@@ -147,6 +147,13 @@ class sha512:
     def hexdigest(self):
         return self.digest().hex()
 
+    def copy(self):
+        other = sha512.__new__(sha512)
+        other._h = list(self._h)
+        other._buf = bytearray(self._buf)
+        other._len = self._len
+        return other
+
 
 def pbkdf2_hmac(hash_name, password, salt, iterations, dklen=None):
     """Generic PBKDF2-HMAC on top of hashlib's hash factory."""
