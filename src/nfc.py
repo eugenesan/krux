@@ -56,13 +56,26 @@ CORE_RESET = 0x00
 CORE_INIT = 0x01
 CORE_SET_CONFIG = 0x02
 CORE_SET_CLK = 0x03
-RF_DISCOVER = 0x00
+# GID_RF OIDs.  The names follow the NCI 1.0 table; the captured
+# vendor trace uses exactly these numbers:
+#   0x00 RF_DISCOVER_MAP      one mapping per protocol
+#   0x01 RF_SET_ROUTING      which NFCEE gets which protocol
+#   0x03 RF_DISCOVER         configure + (re)start polling
+#   0x04 RF_DISCOVER_SELECT  choose one discovered tag
+#   0x05 RF_INTF_ACTIVATED_NTF
+#   0x06 RF_DEACTIVATE       stop polling
+RF_DISCOVER_MAP = 0x00
 RF_SET_ROUTING = 0x01
-RF_PROTOCOLS_OID = 0x03
+RF_DISCOVER = 0x03
+RF_DISCOVER_SELECT = 0x04
+RF_INTF_ACTIVATED_NTF = 0x05
 RF_DEACTIVATE = 0x06
-RF_ACTIVATE = 0x04
-RF_ACTIVATE_NTF = 0x05
-RF_STATUS = 0x06
+# This chip reports "a tag is there" as an OID-0x06 notification with
+# a 0x02 first payload byte; the vendor trace shows it right before
+# the RF_DISCOVER_SELECT below.  (NCI 1.0 calls that OID the
+# deactivate one; the chip is from 2012 and the trace is the
+# reference, not the spec.)
+RF_TAG_NTF = 0x06
 MT_DATA = 0x00
 PROP_GET_BUILD_INFO = 0x04
 PROP_GET_PATCH_VERSION = 0x2D
@@ -113,15 +126,18 @@ PROP_06 = bytes.fromhex("01")
 RF_ROUTING = bytes.fromhex(
     "00 04 01 03 00 01 03 01 03 00 01 04 00 03 00 01 00 00 03 00 01 02")
 
-# the protocol numbers the HAL sets up (GID_RF, OID 3)
-RF_PROTOCOLS = bytes.fromhex(
+# the discovery mapping the HAL sets up (GID_RF, OID 0): two mappings,
+# ISO-DEP (0x04) and NFC-DEP (0x05), both in poll mode (0x03)
+DISCOVER_MAP_PARAMS = bytes.fromhex("02 04 03 02 05 03 03")
+
+# the discovery configuration (GID_RF, OID 3): seven poll
+# configurations, with the vendor's proprietary 0x74/0x77 ones
+DISCOVER_PARAMS = bytes.fromhex(
     "07 00 01 01 01 02 01 80 01 06 01 74 01 77 01")
 
-# the discovery: two poll configurations
-DISCOVER = bytes.fromhex("02 04 03 02 05 03 03")
-
-# the ISO-DEP activation request
-ACTIVATE = bytes.fromhex("01 04 02")
+# the ISO-DEP selection request (GID_RF, OID 4): discovery id 1,
+# protocol 4 (ISO-DEP), interface 2 (ISO-DEP)
+SELECT_PARAMS = bytes.fromhex("01 04 02")
 
 
 # The wake line.  The HAL deasserts it at power-on (that is what
@@ -315,10 +331,12 @@ class IsoDepTransport:
         # a proprietary command the HAL makes after the poll configuration
         chip.send(MT_CMD, GID_PROP, 0x06, PROP_06)
 
-        # the HAL starts polling here, then goes on configuring
-        rsp = chip.send(MT_CMD, GID_RF, RF_DISCOVER, DISCOVER)
+        # The map does not start a poll cycle, it only says which
+        # protocol goes on which interface; the discover below starts
+        # the polling.
+        rsp = chip.send(MT_CMD, GID_RF, RF_DISCOVER_MAP, DISCOVER_MAP_PARAMS)
         if rsp[4] != 0:
-            raise NfcError("DISCOVER failed")
+            raise NfcError("DISCOVER_MAP failed")
 
         # the RF parameters and the chip's own clock
         chip.send(MT_CMD, GID_CORE, CORE_SET_CONFIG, SET_CONFIG_RF)
@@ -331,7 +349,7 @@ class IsoDepTransport:
         chip.send(MT_CMD, GID_CORE, CORE_SET_CONFIG, SET_CONFIG_80)
         chip.send(MT_CMD, GID_CORE, CORE_SET_CONFIG, SET_CONFIG_POLL_PARAMS)
         chip.send(MT_CMD, GID_CORE, CORE_SET_CONFIG, SET_CONFIG_00)
-        chip.send(MT_CMD, GID_RF, RF_PROTOCOLS_OID, RF_PROTOCOLS)
+        chip.send(MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS)
         chip.send(MT_CMD, GID_RF, RF_DEACTIVATE, bytes([0x00]))
 
         # And then the routing and the protocol numbers *again*: the
@@ -340,55 +358,71 @@ class IsoDepTransport:
         # trace of the ROM's own stack shows the tag notification
         # right after these two commands and not before.)
         chip.send(MT_CMD, GID_RF, RF_SET_ROUTING, RF_ROUTING)
-        chip.send(MT_CMD, GID_RF, RF_PROTOCOLS_OID, RF_PROTOCOLS)
+        chip.send(MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS)
 
         # whatever the chip said in between
         for n in chip.notifications:
             _dbg("ntf", n)
         chip.notifications = []
 
+    @staticmethod
+    def _is_tag(pkt):
+        """A notification that says a tag is in the field."""
+        if len(pkt) < 4 or pkt[1] & 0xE0 != MT_NTF:
+            return False
+        if pkt[2] == RF_INTF_ACTIVATED_NTF:
+            return True
+        # this chip's "tag is there" notification
+        return pkt[2] == RF_TAG_NTF and len(pkt) >= 6 and pkt[4] == 0x02
+
     def _discover(self, timeout_ms):
         """Start polling and wait for a tag.
 
-        The chip polls in cycles: a card that shows up while it is
-        between two cycles is not seen until the next one.  The
-        vendor's stack therefore keeps the discovery going (it sends
-        the DISCOVER again and again), and so do we -- a card that is
-        presented at any moment is then caught.
+        The chip polls in cycles.  The vendor's own stack stops the
+        poll with RF_DEACTIVATE, re-sends the routing and then the
+        discovery configuration, and the tag notification follows
+        right after that.  Sending RF_DISCOVER while a poll is still
+        running is refused with a semantic error (0x06), so the
+        deactivate is not optional.
         """
         deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
-        last_discover = 0
+        # The discover that closed the bring-up gets its full window
+        # before the first restart: a restart interrupts a poll.
+        last_discover = time.ticks_ms()
 
         while True:
             left = time.ticks_diff(deadline, time.ticks_ms())
             if left <= 0:
                 raise CardTimeout("no card within %d ms" % timeout_ms)
 
-            # (re)start the polling.  The vendor's stack stops the
-            # discovery and starts it again for every cycle, and
-            # the chip only looks for a tag in those windows.
+            # Notifications that arrived while a command was being
+            # sent are buffered by Chip.send(); look at them first.
+            while self.chip.notifications:
+                ntf = self.chip.notifications.pop(0)
+                _dbg("ntf", ntf)
+                if self._is_tag(ntf):
+                    return ntf
+
             now = time.ticks_ms()
             if time.ticks_diff(now, last_discover) >= DISCOVER_INTERVAL_MS:
                 last_discover = now
-                rsp = self.chip.send(MT_CMD, GID_RF, RF_DISCOVER, DISCOVER)
-                if rsp[4] != 0:
-                    raise NfcError("DISCOVER failed")
+                # stop whatever poll is running, then start a fresh
+                # one exactly as the vendor's stack does
+                self.chip.send(MT_CMD, GID_RF, RF_DEACTIVATE, bytes([0x00]))
+                self.chip.send(MT_CMD, GID_RF, RF_SET_ROUTING, RF_ROUTING)
+                rsp = self.chip.send(
+                    MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS
+                )
+                status = rsp[4]
+                # 0x00 ok, 0x09 already started, 0x0a target activated
+                if status not in (0x00, 0x09, 0x0A):
+                    raise NfcError("DISCOVER failed (0x%02x)" % status)
 
             pkt = self.chip.read(min(left, 500))
             if pkt is None:
                 continue
             _dbg("rx", pkt)
-            if len(pkt) < 4:
-                continue
-            if pkt[1] & 0xE0 != MT_NTF:
-                continue
-            if pkt[2] == RF_STATUS and len(pkt) >= 6 and pkt[4] == 0x02:
-                # the "a tag is there" notification
-                return pkt
-            if pkt[2] == RF_ACTIVATE_NTF:
-                # the chip activated the tag by itself (it does that
-                # once the routing and the protocol numbers are set
-                # up), so the tag is already there
+            if self._is_tag(pkt):
                 return pkt
 
     def _activate(self, ntf):
@@ -397,25 +431,30 @@ class IsoDepTransport:
         The chip does it by itself once the routing and the protocol
         numbers are set up -- it then sends the activation
         notification on its own.  If that has not happened yet, ask
-        for it: the request is three bytes (the protocol, 1 =
-        ISO-DEP; the length of what follows; the parameter).
+        for it: the request is three bytes (the discovery id, 1 =
+        ISO-DEP protocol 4, ISO-DEP interface 2).
         """
-        if ntf is not None and len(ntf) >= 4 and ntf[2] == RF_ACTIVATE_NTF:
+        if ntf is not None and len(ntf) >= 4 and ntf[2] == RF_INTF_ACTIVATED_NTF:
             return ntf
 
-        rsp = self.chip.send(MT_CMD, GID_RF, RF_ACTIVATE, ACTIVATE)
+        rsp = self.chip.send(
+            MT_CMD, GID_RF, RF_DISCOVER_SELECT, SELECT_PARAMS
+        )
         if rsp[4] != 0:
             raise NfcError("the activation was refused")
 
         # the activation notification carries the tag's details
-        act = self.chip.wait_ntf(RF_ACTIVATE_NTF, 3000)
+        act = self.chip.wait_ntf(RF_INTF_ACTIVATED_NTF, 3000)
         if act is None:
             raise NfcError("no activation notification")
+        _dbg("act", act)
         return act
 
     def _data(self, apdu, timeout_ms=2000):
         """One APDU exchange: the data goes out as an MT_DATA packet."""
-        self.chip.write(bytes([HCIT_NFC, MT_DATA, 0x00, len(apdu)]) + apdu)
+        pkt = bytes([HCIT_NFC, MT_DATA, 0x00, len(apdu)]) + apdu
+        _dbg("data tx", pkt)
+        self.chip.write(pkt)
 
         deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
         while True:
@@ -423,8 +462,9 @@ class IsoDepTransport:
             if left <= 0:
                 raise CardTimeout("the card did not answer")
             pkt = self.chip.read(left)
-            if pkt is None or len(pkt) < 5:
+            if pkt is None or len(pkt) < 4:
                 continue
+            _dbg("data rx", pkt)
             if pkt[1] == MT_DATA:
                 # the payload is the response: the data, then SW1 SW2
                 body = pkt[4:]
