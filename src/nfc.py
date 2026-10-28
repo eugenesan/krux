@@ -372,8 +372,11 @@ class IsoDepTransport:
             return False
         if pkt[2] == RF_INTF_ACTIVATED_NTF:
             return True
-        # this chip's "tag is there" notification
-        return pkt[2] == RF_TAG_NTF and len(pkt) >= 6 and pkt[4] == 0x02
+        # This chip's "tag is there" notification: OID 6 with the
+        # 2-byte payload `01 00` seen in the vendor's capture.  A
+        # real deactivate notification carries three bytes (type,
+        # reason, discovery id), so the length tells them apart.
+        return pkt[2] == RF_TAG_NTF and pkt[3] == 2
 
     def _discover(self, timeout_ms):
         """Start polling and wait for a tag.
