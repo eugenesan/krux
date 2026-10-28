@@ -56,6 +56,9 @@ CORE_RESET = 0x00
 CORE_INIT = 0x01
 CORE_SET_CONFIG = 0x02
 CORE_SET_CLK = 0x03
+CORE_CONN_CREDITS = 0x06
+CORE_GENERIC_ERROR = 0x07
+CORE_INTERFACE_ERROR = 0x08
 # GID_RF OIDs.  The names follow the NCI 1.0 table; the captured
 # vendor trace uses exactly these numbers:
 #   0x00 RF_DISCOVER_MAP      one mapping per protocol
@@ -163,7 +166,20 @@ DEBUG = 1
 
 def _dbg(what, data):
     if DEBUG:
-        print("  [%s] %s" % (what, " ".join("%02x" % c for c in data)))
+        print("  [%6d] [%s] %s" % (
+            time.ticks_ms() % 1000000, what,
+            " ".join("%02x" % c for c in data)))
+
+
+# The NCI status byte of a CORE_INTERFACE_ERROR notification.  Only the
+# values we have actually seen (or that a reader can produce when a card
+# is lifted) are named; everything else is shown as a number.
+NCI_INTERFACE_ERRORS = {
+    0xB0: "RF frame corrupted",
+    0xB1: "RF frame lost",
+    0xB2: "RF timeout (the card did not answer in time)",
+    0xB3: "unexpected RF data",
+}
 
 
 class NfcError(Exception):
@@ -350,15 +366,13 @@ class IsoDepTransport:
         chip.send(MT_CMD, GID_CORE, CORE_SET_CONFIG, SET_CONFIG_POLL_PARAMS)
         chip.send(MT_CMD, GID_CORE, CORE_SET_CONFIG, SET_CONFIG_00)
         chip.send(MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS)
-        chip.send(MT_CMD, GID_RF, RF_DEACTIVATE, bytes([0x00]))
 
-        # And then the routing and the protocol numbers *again*: the
-        # vendor's stack sends them a second time, after the
-        # deactivate, and the chip only finds a tag after that.  (The
-        # trace of the ROM's own stack shows the tag notification
-        # right after these two commands and not before.)
-        chip.send(MT_CMD, GID_RF, RF_SET_ROUTING, RF_ROUTING)
-        chip.send(MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS)
+        # No RF_DEACTIVATE here.  The vendor's trace has one, but our
+        # chip then reports the RF field as *off* (RF_FIELD_INFO_NTF
+        # with status 0x00) and never turns it back on, so the
+        # deactivate is what stops discovery, not what starts it.
+        # The discovery that is left running here is the one the
+        # chip polls with.
 
         # whatever the chip said in between
         for n in chip.notifications:
@@ -370,6 +384,11 @@ class IsoDepTransport:
         """A notification that says a tag is in the field."""
         if len(pkt) < 4 or pkt[1] & 0xE0 != MT_NTF:
             return False
+        # RF_DISCOVER_NTF: the chip has found a target and expects the
+        # host to select it.  (This is the notification the vendor's
+        # stack acts on; our earlier code only looked at OID 5/6.)
+        if pkt[2] == RF_DISCOVER:
+            return pkt[3] >= 2
         if pkt[2] == RF_INTF_ACTIVATED_NTF:
             return True
         # This chip's "tag is there" notification: OID 6 with the
@@ -379,18 +398,16 @@ class IsoDepTransport:
         return pkt[2] == RF_TAG_NTF and pkt[3] == 2
 
     def _discover(self, timeout_ms):
-        """Start polling and wait for a tag.
+        """Wait for a tag while the discovery started by bring-up runs.
 
-        The chip polls in cycles.  The vendor's own stack stops the
-        poll with RF_DEACTIVATE, re-sends the routing and then the
-        discovery configuration, and the tag notification follows
-        right after that.  Sending RF_DISCOVER while a poll is still
-        running is refused with a semantic error (0x06), so the
-        deactivate is not optional.
+        Do not stop and restart the discovery: the deactivate turns
+        the RF field off and RF_DISCOVER does not bring it back on
+        this chip.  Re-sending RF_DISCOVER while it is already
+        running is allowed (the chip answers 0x06 "already started"),
+        so a periodic re-send is only a safety net for a discovery
+        that has timed out on its own.
         """
         deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
-        # The discover that closed the bring-up gets its full window
-        # before the first restart: a restart interrupts a poll.
         last_discover = time.ticks_ms()
 
         while True:
@@ -409,16 +426,13 @@ class IsoDepTransport:
             now = time.ticks_ms()
             if time.ticks_diff(now, last_discover) >= DISCOVER_INTERVAL_MS:
                 last_discover = now
-                # stop whatever poll is running, then start a fresh
-                # one exactly as the vendor's stack does
-                self.chip.send(MT_CMD, GID_RF, RF_DEACTIVATE, bytes([0x00]))
-                self.chip.send(MT_CMD, GID_RF, RF_SET_ROUTING, RF_ROUTING)
                 rsp = self.chip.send(
                     MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS
                 )
                 status = rsp[4]
-                # 0x00 ok, 0x09 already started, 0x0a target activated
-                if status not in (0x00, 0x09, 0x0A):
+                # 0x00 ok, 0x06 already active, 0x09 already started,
+                # 0x0a target activated
+                if status not in (0x00, 0x06, 0x09, 0x0A):
                     raise NfcError("DISCOVER failed (0x%02x)" % status)
 
             pkt = self.chip.read(min(left, 500))
@@ -440,20 +454,41 @@ class IsoDepTransport:
         if ntf is not None and len(ntf) >= 4 and ntf[2] == RF_INTF_ACTIVATED_NTF:
             return ntf
 
+        params = SELECT_PARAMS
+        if ntf is not None and ntf[2] == RF_DISCOVER and len(ntf) >= 6:
+            # the discover notification names the target it found:
+            # discovery id, protocol, technology/mode
+            disc, proto = ntf[4], ntf[5]
+            interface = 0x02 if proto == 0x04 else 0x01
+            params = bytes([disc, proto, interface])
+
         rsp = self.chip.send(
-            MT_CMD, GID_RF, RF_DISCOVER_SELECT, SELECT_PARAMS
+            MT_CMD, GID_RF, RF_DISCOVER_SELECT, params
         )
         if rsp[4] != 0:
             raise NfcError("the activation was refused")
 
-        # the activation notification carries the tag's details
-        act = self.chip.wait_ntf(RF_INTF_ACTIVATED_NTF, 3000)
-        if act is None:
-            raise NfcError("no activation notification")
-        _dbg("act", act)
-        return act
+        # the activation notification carries the tag's details; it
+        # may already be in the buffer that send() filled
+        deadline = time.ticks_add(time.ticks_ms(), 3000)
+        while True:
+            while self.chip.notifications:
+                act = self.chip.notifications.pop(0)
+                _dbg("ntf", act)
+                if act[2] == RF_INTF_ACTIVATED_NTF:
+                    return act
+            left = time.ticks_diff(deadline, time.ticks_ms())
+            if left <= 0:
+                raise NfcError("no activation notification")
+            act = self.chip.read(left)
+            if act is None:
+                continue
+            _dbg("rx", act)
+            if act[1] & 0xE0 == MT_NTF and act[2] == RF_INTF_ACTIVATED_NTF:
+                return act
+            self.chip.notifications.append(act)
 
-    def _data(self, apdu, timeout_ms=2000):
+    def _data(self, apdu, timeout_ms=5000):
         """One APDU exchange: the data goes out as an MT_DATA packet."""
         pkt = bytes([HCIT_NFC, MT_DATA, 0x00, len(apdu)]) + apdu
         _dbg("data tx", pkt)
@@ -463,6 +498,7 @@ class IsoDepTransport:
         while True:
             left = time.ticks_diff(deadline, time.ticks_ms())
             if left <= 0:
+                self.connected = False
                 raise CardTimeout("the card did not answer")
             pkt = self.chip.read(left)
             if pkt is None or len(pkt) < 4:
@@ -474,6 +510,30 @@ class IsoDepTransport:
                 if len(body) < 2:
                     raise NfcError("the card's answer is too short")
                 return body[:-2], body[-2], body[-1]
+
+            # A notification can end the exchange instead of a data
+            # packet.  The important one is CORE_INTERFACE_ERROR: the
+            # NFCC's RF link to the card died and no answer will follow.
+            # (On this chip that is what a lifted card looks like.)
+            if pkt[1] & 0xE0 != MT_NTF:
+                continue
+            gid = pkt[1] & 0x0F
+            if gid == GID_CORE and pkt[2] == CORE_INTERFACE_ERROR:
+                status = pkt[4] if len(pkt) > 4 else 0
+                self.connected = False
+                raise NfcError(
+                    "the card's link failed: %s"
+                    % NCI_INTERFACE_ERRORS.get(status, "0x%02x" % status)
+                )
+            if gid == GID_CORE and pkt[2] == CORE_GENERIC_ERROR:
+                status = pkt[4] if len(pkt) > 4 else 0
+                self.connected = False
+                raise NfcError("the chip reported an error (0x%02x)" % status)
+            if gid == GID_RF and pkt[2] == RF_DEACTIVATE:
+                self.connected = False
+                raise NfcError("the card was removed")
+            # CORE_CONN_CREDITS, RF_FIELD_INFO and anything else are
+            # normal traffic; keep waiting for the actual answer.
 
     # -- the contract -----------------------------------------------------
 
@@ -496,6 +556,11 @@ class IsoDepTransport:
 
             attempt += 1
             try:
+                # A previous attempt may have left the node open (a link
+                # error marks us disconnected but does not close the fd),
+                # and the chip must be power-cycled from a clean state.
+                if self.chip is not None:
+                    self.close()
                 self.chip = Chip().open()
                 self._bring_up()
                 ntf = self._discover(min(left, POLL_WINDOW_MS))

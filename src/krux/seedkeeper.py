@@ -139,6 +139,7 @@ STATUS_WORDS = {
     0x9C0F: "Invalid parameter",
     0x9C11: "Incorrect P2",
     0x9C12: "No more secrets",
+    0x9C20: "Secure channel required",
     0x9C31: "Export not allowed",
     0x9CFF: "Card internal error",
 }
