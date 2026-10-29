@@ -129,13 +129,23 @@ class _Key:
 
 
 class _Keys:
-    """The phone's keys, opened once."""
+    """The phone's keys, opened once.
+
+    A board may expose fewer than the phone's three keys (the upstream test
+    boards are one example), so a missing pin simply means that key is not
+    present rather than an import-time failure.
+    """
 
     def __init__(self):
         pins = board.config["krux"]["pins"]
-        self.enter = _Key(pins["BUTTON_A"], evdev.KEY_POWER)
-        self.page = _Key(pins["BUTTON_B"], evdev.KEY_VOLUME_DOWN)
-        self.page_prev = _Key(pins["BUTTON_C"], evdev.KEY_VOLUME_UP)
+
+        def open_key(name, code):
+            path = pins.get(name)
+            return _Key(path, code) if path is not None else None
+
+        self.enter = open_key("BUTTON_A", evdev.KEY_POWER)
+        self.page = open_key("BUTTON_B", evdev.KEY_VOLUME_DOWN)
+        self.page_prev = open_key("BUTTON_C", evdev.KEY_VOLUME_UP)
 
 
 buttons_control = _Keys()

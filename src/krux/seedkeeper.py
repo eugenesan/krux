@@ -53,6 +53,9 @@ import urandom
 # CardEdge class byte, as used by every Satochip/SeedKeeper instruction below.
 CLA = 0xB0
 
+# Instructions the applet accepts without the secure-channel envelope.
+SC_EXEMPT = (0xA4, 0x81, 0x82, 0xFF, 0x3C)
+
 INS_SETUP = 0x2A
 INS_VERIFY_PIN = 0x42
 INS_GET_STATUS = 0x3C
@@ -61,6 +64,11 @@ INS_EXPORT_SECRET = 0xA2
 INS_RESET_SECRET = 0xA5
 INS_LIST_HEADERS = 0xA6
 INS_SEEDKEEPER_STATUS = 0xA7
+
+# Single-shot read commands that can safely be repeated after a reconnect.
+# Stateful walks (the header list, export chunks, import chunks) have to be
+# restarted by their own, higher-level method instead.
+_RESUME_READ_INS = (INS_SEEDKEEPER_STATUS,)
 
 # The applet's AID: the ASCII "SeedKeeper", ten bytes, one byte per
 # character.
@@ -140,6 +148,10 @@ STATUS_WORDS = {
     0x9C11: "Incorrect P2",
     0x9C12: "No more secrets",
     0x9C20: "Secure channel required",
+    0x9C21: "Secure channel not initialized",
+    0x9C22: "Secure channel IV rejected",
+    0x9C23: "Secure channel MAC rejected",
++   0x9C30: "Card operation lock was not released",
     0x9C31: "Export not allowed",
     0x9CFF: "Card internal error",
 }
@@ -247,6 +259,9 @@ def parse_card_status(data):
         # No setup_done byte means the applet predates the field, and such a
         # card could only have got this far already set up.
         "setup_done": data[10] != 0 if len(data) > 10 else True,
+        # Newer applets make every command except GET_STATUS, 0x81 and 0x82
+        # require the secure channel.  Absent means the old plaintext applet.
+        "needs_secure_channel": data[11] != 0 if len(data) > 11 else False,
     }
     return status
 
@@ -266,7 +281,9 @@ def parse_memory_status(data):
 
 def secret_fingerprint(secret):
     """The card's own fingerprint for a plaintext secret: sha256, first 8 hex."""
-    return sha256(bytes(secret)).hexdigest()[:8]
+    # MicroPython's hashlib has digest() but not hexdigest(); bytes.hex() is
+    # available in the port, and the card compares the first four bytes.
+    return bytes(sha256(bytes(secret)).digest()).hex()[:8]
 
 
 def padded_size(secret):
@@ -341,8 +358,72 @@ class SeedKeeper:
 
     def __init__(self, transport):
         self.transport = transport
+        self.secure_channel = None
+        self.needs_secure_channel = False
+        # Kept only for the lifetime of this object, so that a read command
+        # interrupted by the NFC link going idle can log in again without
+        # asking the user for the PIN a second time.
+        self._pin = None
+        self._reconnecting = False
 
-    def _transmit(self, apdu):
+    def _init_secure_channel(self):
+        """Run the 0x81 handshake and derive the session keys."""
+        from .seedkeeper_sc import SecureChannel
+
+        channel = SecureChannel(self.transport)
+        channel.initiate()
+        self.secure_channel = channel
+
+    def _login_again(self):
+        """Select the applet and re-verify the PIN after a lost RF link.
+
+        Selecting resets the card-side session, so a new secure channel and a
+        fresh PIN check are required before another protected command can run.
+        """
+        if self._pin is None:
+            return False
+        pin_bytes = self._pin.encode("utf-8")
+        self._reconnecting = True
+        try:
+            self.refresh()
+            apdu = [CLA, INS_VERIFY_PIN, 0x00, 0x00, len(pin_bytes)] + list(pin_bytes)
+            if self.needs_secure_channel:
+                self._init_secure_channel()
+                _, sw1, sw2 = self._transmit_secure(apdu)
+            else:
+                # An older applet accepts a plaintext PIN, and a secure
+                # channel is not part of its protocol.
+                _, sw1, sw2 = self.transport.transmit(apdu)
+            return sw1 == 0x90 and sw2 == 0x00
+        finally:
+            self._reconnecting = False
+
+    def _transmit_secure(self, apdu):
+        if self.secure_channel is None:
+            self._init_secure_channel()
+        outer = self.secure_channel.wrap(apdu)
+        data, sw1, sw2 = self.transport.transmit(outer)
+        if sw1 == 0x9C and sw2 == 0x30:
+            # The applet's multi-step lock is transient: resetLockThenThrow()
+            # clears it before returning 0x9C30.  The command itself did not
+            # run, so send it again under a fresh IV/counter.
+            outer = self.secure_channel.wrap(apdu)
+            data, sw1, sw2 = self.transport.transmit(outer)
+        if sw1 == 0x90 and sw2 == 0x00:
+            data = self.secure_channel.unwrap(data)
+        return data, sw1, sw2
+
+    def _should_reauth(self, apdu, exc):
+        """Whether a failed command can be repeated after a fresh login."""
+        return (
+            not self._reconnecting
+            and self._pin is not None
+            and exc.sw is None
+            and len(apdu) >= 2
+            and apdu[1] in _RESUME_READ_INS
+        )
+
+    def _transmit(self, apdu, _retry=True):
         """Send one APDU and hand back (data, sw1, sw2) unexamined.
 
         A transport speaks whatever its host speaks -- pyjnius raises the
@@ -350,17 +431,42 @@ class SeedKeeper:
         SeedKeeperError here. That puts every failure this module can produce
         behind one exception type, and lets callers above keep catching just
         the one.
+
+        On a card whose status says ``needs_secure_channel``, everything except
+        SELECT and GET_STATUS is wrapped for the applet.  If the card answers
+        0x9C20 to a plaintext command anyway, the status was stale: establish
+        the channel and resend it once.
         """
+        apdu = bytes(apdu)
         try:
-            return self.transport.transmit(bytes(apdu))
+            if self.needs_secure_channel and apdu[1] not in SC_EXEMPT:
+                return self._transmit_secure(apdu)
+            data, sw1, sw2 = self.transport.transmit(apdu)
+            if sw1 == 0x9C and sw2 == 0x20 and apdu[1] not in SC_EXEMPT:
+                self.needs_secure_channel = True
+                return self._transmit_secure(apdu)
+            return data, sw1, sw2
         # pylint: disable=broad-except
         # The transport is host code behind a one-method interface; its error
         # type is whatever the host runtime raises, and a card pulled off the
         # phone mid-command must read as a card error, not a crash.
-        except SeedKeeperError:
+        except SeedKeeperError as exc:
+            if _retry and self._should_reauth(apdu, exc):
+                try:
+                    if self._login_again():
+                        return self._transmit(apdu, _retry=False)
+                except Exception:
+                    pass
             raise
         except Exception as exc:
-            raise SeedKeeperError("Card communication failed: %s" % exc) from exc
+            error = SeedKeeperError("Card communication failed: %s" % exc)
+            if _retry and self._should_reauth(apdu, error):
+                try:
+                    if self._login_again():
+                        return self._transmit(apdu, _retry=False)
+                except Exception:
+                    pass
+            raise error from exc
 
     def _transmit_ok(self, apdu):
         """Send one APDU that has to succeed, or raise SeedKeeperError."""
@@ -376,10 +482,34 @@ class SeedKeeper:
         from the tag's AID list) can skip this; a raw one cannot.
         """
         self._transmit_ok(SELECT_APDU + [len(SEEDKEEPER_AID)] + SEEDKEEPER_AID)
+        # Selecting the applet resets the card-side session.  Keep the host
+        # object in step; the next secure command establishes a new channel.
+        self.secure_channel = None
+
+    def refresh(self):
+        """Make sure the applet is selected, retrying a lost first command.
+
+        The NFC port's ISO-DEP link is dropped after a few seconds without
+        traffic, and the first APDU after an activation is sometimes lost.
+        The transport reconnects on the next command, so a failed select is
+        retried once.  Selecting the applet also logs it out, so only use
+        this before a command that logs in again (PIN verification or setup).
+        """
+        for attempt in range(3):
+            try:
+                self.select()
+                return
+            except SeedKeeperError as exc:
+                if exc.sw is not None or attempt == 2:
+                    raise
 
     def card_status(self):
         """Card-wide status: versions, PIN tries left, whether setup is done."""
-        return parse_card_status(self._transmit_ok([CLA, INS_GET_STATUS, 0x00, 0x00]))
+        status = parse_card_status(
+            self._transmit_ok([CLA, INS_GET_STATUS, 0x00, 0x00])
+        )
+        self.needs_secure_channel = status["needs_secure_channel"]
+        return status
 
     def memory_status(self):
         """SeedKeeper-specific status: secret count and free memory."""
@@ -399,6 +529,7 @@ class SeedKeeper:
         self._transmit_ok(
             [CLA, INS_VERIFY_PIN, 0x00, 0x00, len(pin_bytes)] + list(pin_bytes)
         )
+        self._pin = pin
 
     def setup(self, pin):
         """Initialise a blank card with ``pin`` as its PIN (INS 2A).
@@ -426,20 +557,36 @@ class SeedKeeper:
         """Every secret header on the card, in card order.
 
         The card walks its objects one APDU at a time and ends with 0x9C12;
-        that ending is the loop's normal exit, not a failure.
+        that ending is the loop's normal exit, not a failure.  The walk is
+        stateful inside the applet, so a lost link means starting it again
+        after a fresh login rather than repeating one step.
         """
-        headers = []
-        p2 = 0x01
-        while True:
-            data, sw1, sw2 = self._transmit([CLA, INS_LIST_HEADERS, 0x00, p2])
-            if sw1 == 0x90 and sw2 == 0x00:
-                headers.append(parse_header(data))
-            elif (sw1 << 8) | sw2 == 0x9C12:
-                break
-            else:
-                raise SeedKeeperError(status_text(sw1, sw2), (sw1 << 8) | sw2)
-            p2 = 0x02
-        return headers
+        for attempt in range(2):
+            try:
+                headers = []
+                p2 = 0x01
+                while True:
+                    data, sw1, sw2 = self._transmit(
+                        [CLA, INS_LIST_HEADERS, 0x00, p2]
+                    )
+                    if sw1 == 0x90 and sw2 == 0x00:
+                        headers.append(parse_header(data))
+                    elif (sw1 << 8) | sw2 == 0x9C12:
+                        break
+                    else:
+                        raise SeedKeeperError(
+                            status_text(sw1, sw2), (sw1 << 8) | sw2
+                        )
+                    p2 = 0x02
+                return headers
+            except SeedKeeperError as exc:
+                if (
+                    attempt == 1
+                    or exc.sw is not None
+                    or self._pin is None
+                    or not self._login_again()
+                ):
+                    raise
 
     def export_secret(self, secret_id):
         """Read one secret in full -> (header, secret bytes).
@@ -488,13 +635,14 @@ class SeedKeeper:
     def import_secret(self, header, secret):
         """Write one secret and return (id, fingerprint) as the card assigned.
 
-        ``header`` comes from make_header(). The card takes the type and
-        origin from its own bookkeeping, so only the header from export_rights
-        onwards is sent -- which is why the first four bytes go.
+        ``header`` comes from make_header(), whose first two bytes are the
+        object id that the card assigns on import.  The applet's import header
+        starts at the secret type, so send ``header[2:]``; the id and the
+        origin byte are then either supplied or ignored by the card.
         """
         secret = list(secret)
         size = padded_size(secret)
-        payload = header[4:] + [(size >> 8) & 0xFF, size & 0xFF]
+        payload = header[2:] + [(size >> 8) & 0xFF, size & 0xFF]
         self._transmit_ok([CLA, INS_IMPORT_SECRET, 0x01, 0x01, len(payload)] + payload)
         offset = 0
         remaining = len(secret)
@@ -539,7 +687,10 @@ class SeedKeeper:
 
 def _random_bytes(count):
     """``count`` bytes from the platform CSPRNG."""
-    return urandom.getrandbits(count * 8).to_bytes(count, "big")
+    out = bytearray()
+    while len(out) < count:
+        out.extend(urandom.getrandbits(32).to_bytes(4, "big"))
+    return bytes(out[:count])
 
 
 # Sentinel for "the reader has not been looked up yet", so that a build with

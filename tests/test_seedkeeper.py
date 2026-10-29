@@ -151,16 +151,16 @@ class FakeCard:
             return self._fail(0x9C04)
         data = list(apdu[5:])
         if p2 == 0x01:
-            # header[4:]: export_rights, 3 counters, 4 fingerprint bytes,
+            # header[2:]: type, origin, export_rights, counters/fingerprint,
             # subtype, reserved, label_size, label, then the padded size.
-            label_size = data[10]
+            label_size = data[12]
             self.pending = {
-                "export_rights": data[0],
-                "type": self.default_type,
+                "export_rights": data[2],
+                "type": data[0],
                 "label_size": label_size,
-                "label": bytes(data[11 : 11 + label_size]).decode("utf-8"),
-                "subtype": data[8],
-                "size": (data[11 + label_size] << 8) + data[12 + label_size],
+                "label": bytes(data[13 : 13 + label_size]).decode("utf-8"),
+                "subtype": data[10],
+                "size": (data[13 + label_size] << 8) + data[14 + label_size],
                 "payload": [],
             }
             return self._ok()

@@ -213,7 +213,8 @@ class TestLoadSeed:
         page, _ = make_page()
         page.ctx.display.draw_centered_text = lambda text: said.append(text)
         page.load_seed()
-        assert said[0] == "Tap your SeedKeeper card"
+        assert "Tap your SeedKeeper card" in said[0]
+        assert "back" in said[0] and "camera" in said[0]
 
     def test_the_words_reach_the_normal_load_path(self, reader, make_page, keypad):
         store_seed(reader)
@@ -352,7 +353,7 @@ class TestSaveSeed:
     ):
         from embit.bip39 import mnemonic_to_bytes, mnemonic_to_seed
 
-        keypad.side_effect = ["123456", "savings"]
+        keypad.side_effect = ["savings", "123456"]
         page, _ = make_page(wallet=wallet)
         page.save_seed()
         header, secret = export_seed(reader)
@@ -368,7 +369,7 @@ class TestSaveSeed:
     def test_what_it_writes_can_be_loaded_back(self, reader, make_page, keypad, wallet):
         # The round trip is the feature: save, then read through the same
         # screen a user would.
-        keypad.side_effect = ["123456", "savings", "123456"]
+        keypad.side_effect = ["savings", "123456", "123456"]
         page, _ = make_page(wallet=wallet)
         page.save_seed()
         import krux.seedkeeper as sk
@@ -383,14 +384,15 @@ class TestSaveSeed:
     ):
         page, _ = make_page(wallet=wallet)
         page.save_seed()
-        assert keypad.call_args.kwargs[
+        # The label is asked for first, before the card is presented.
+        assert keypad.call_args_list[0].kwargs[
             "starting_buffer"
         ] == wallet.key.fingerprint_hex_str(False)
 
     def test_an_empty_label_is_re_asked(
         self, reader, make_page, keypad, wallet, errors
     ):
-        keypad.side_effect = ["123456", "", "  ", "savings"]
+        keypad.side_effect = ["", "  ", "savings", "123456"]
         page, _ = make_page(wallet=wallet)
         page.save_seed()
         assert errors.count("Label cannot be empty") == 2
@@ -399,7 +401,7 @@ class TestSaveSeed:
     def test_a_label_the_card_cannot_hold_is_re_asked(
         self, reader, make_page, keypad, wallet, errors
     ):
-        keypad.side_effect = ["123456", "x" * 65, "savings"]
+        keypad.side_effect = ["x" * 65, "savings", "123456"]
         page, _ = make_page(wallet=wallet)
         page.save_seed()
         assert errors == ["Label too long (max 64)"]

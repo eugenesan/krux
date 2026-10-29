@@ -34,6 +34,15 @@ def _reverse(b):
     return bytes(out)
 
 
+def _bit_length(value):
+    """MicroPython has no int.bit_length(); count bits one at a time."""
+    length = 0
+    while value:
+        length += 1
+        value >>= 1
+    return length
+
+
 def _reverse64(b):
     """Converts (a,b) from big to little endian to be consistent with secp256k1"""
     x = b[:32]
@@ -147,8 +156,8 @@ def ecdsa_signature_serialize_der(sig, context=None):
         raise ValueError("Signature should be 64 bytes long")
     r = int.from_bytes(sig[:32], "little")
     s = int.from_bytes(sig[32:], "little")
-    rb = r.to_bytes((r.bit_length() + 8) // 8, "big")
-    sb = s.to_bytes((s.bit_length() + 8) // 8, "big")
+    rb = r.to_bytes((_bit_length(r) + 8) // 8, "big")
+    sb = s.to_bytes((_bit_length(s) + 8) // 8, "big")
     return (
         b"\x30"
         + bytes([4 + len(rb) + len(sb), 2, len(rb)])

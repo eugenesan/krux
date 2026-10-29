@@ -97,6 +97,8 @@ def mp_modules(mocker, monkeypatch):
         mocker.MagicMock(
             pbkdf2_hmac_sha256=pbkdf2_hmac_sha256_wrapper,
             sha256=hashlib.sha256,
+            sha512=hashlib.sha512,
+            _FastSHA512=hashlib.sha512,
         ),
     )
     monkeypatch.setitem(

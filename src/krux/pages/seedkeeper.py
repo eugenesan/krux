@@ -38,6 +38,8 @@ Ported from the SeedSigner fork by 3rdIteration:
 https://github.com/3rdIteration/seedsigner
 """
 
+import time
+
 from . import (
     Page,
     Menu,
@@ -56,6 +58,14 @@ from .. import seedkeeper as sk
 # one swipe away rather than forbidden.
 PIN_KEYSETS = [DIGITS, LETTERS, UPPERCASE_LETTERS]
 LABEL_KEYSETS = [LETTERS, UPPERCASE_LETTERS, DIGITS]
+
+# The Nexus 5's NFC antenna is in the back cover and its coupling is weak.
+# A card session is therefore allowed to retry for a long time, with a
+# bounded wait per activation so the user can cancel between attempts.
+CARD_ATTEMPT_TIMEOUT_MS = 8000
+CARD_SESSION_ATTEMPTS = 20
+CARD_ACTION_RETRIES = 3
+CARD_RETRY_PAUSE_S = 0.1
 
 
 class SeedKeeperPage(Page):
@@ -125,55 +135,214 @@ class SeedKeeperPage(Page):
                 % (sk.PIN_MIN_SIZE, sk.PIN_MAX_SIZE)
             )
 
-    def _connect(self):
-        """Reach the card and get past its PIN. None if the user backs out.
+    def _reader_prompt(self, transport, attempt=1):
+        """Start the reader and show where to hold the card.
 
-        A card with no PIN set yet is set up here, since that is the only
-        moment the applet allows a PIN to be chosen.
+        The RF field is started *before* the prompt: this chip only notices a
+        card that enters an already-running field.  The Nexus 5 antenna is in
+        the back cover around the camera, so the prompt names that spot; the
+        coupling is weak enough that placement is part of the procedure.
+        """
+        prepare = getattr(transport, "prepare", None)
+        if prepare is not None:
+            self.ctx.display.clear()
+            self.ctx.display.draw_centered_text(t("Starting card reader"))
+            try:
+                prepare()
+            except Exception as exc:  # transport-specific error
+                close = getattr(transport, "close", None)
+                if close is not None:
+                    close()
+                self.flash_error("%s\n%s" % (t("Card error"), exc))
+                return False
+            self.ctx.display.clear()
+        if attempt <= 1:
+            text = t(
+                "Tap your SeedKeeper card\nflat on the back,\nover the camera.\nHold it still."
+            )
+        else:
+            text = t("Keep card in place.\nRetrying %d.\nTap to cancel.") % attempt
+        self.ctx.display.draw_centered_text(text)
+        return True
+
+    def _cancel_requested(self):
+        """Whether the user tapped the screen since the last check."""
+        try:
+            btn = self.ctx.input.wait_for_button(
+                block=False, wait_duration=50
+            )
+        except Exception:  # input is optional on some boards
+            return False
+        # Only a real button value cancels.  This also keeps a mocked input
+        # in the host tests from looking like a permanent key press.
+        return isinstance(btn, int) and btn in (0, 1, 2, 3)
+
+    def _retry_screen(self, attempt):
+        """Tell the user the link was not made and that the card must stay."""
+        self.ctx.display.clear()
+        self.ctx.display.draw_centered_text(
+            t("Card not read.\nKeep it flat.\nTap to cancel.\nRetry %d") % attempt
+        )
+
+    def _card_session(self, transport):
+        """Select the applet and read its status, retrying until cancelled.
+
+        The card's coupling is marginal, so a single failed activation is
+        normal.  Only link failures are retried; a real status word (applet
+        not found, for example) is final.  Returns ``(card, status)`` or
+        ``(None, None)``.
+        """
+        # Drop whatever key/touch event opened this screen, so it cannot be
+        # mistaken for a cancel request on the first failed activation.
+        try:
+            self.ctx.input.reset_ios_state()
+        except Exception:
+            pass
+        last_error = None
+        for attempt in range(1, CARD_SESSION_ATTEMPTS + 1):
+            if not self._reader_prompt(transport, attempt):
+                last_error = t("Card reader did not start")
+            else:
+                try:
+                    # The phone transport has an explicit connect step; a
+                    # mock/card transport may simply answer transmit().
+                    connect = getattr(transport, "connect", None)
+                    if connect is not None:
+                        connect(CARD_ATTEMPT_TIMEOUT_MS)
+                    card = sk.SeedKeeper(transport)
+                    card.select()
+                    status = card.card_status()
+                    return card, status
+                except sk.SeedKeeperError as exc:
+                    last_error = exc
+                    if exc.sw is not None:
+                        self.flash_error(
+                            t("No SeedKeeper applet\nInstall it first.")
+                            if exc.sw == sk.SW_APPLET_NOT_FOUND
+                            else "%s\n%s" % (t("Card error"), exc)
+                        )
+                        return None, None
+                except Exception as exc:  # transport/card timeout
+                    last_error = exc
+            if self._cancel_requested():
+                self.flash_text(t("Cancelled"))
+                return None, None
+            self._retry_screen(attempt)
+            time.sleep(CARD_RETRY_PAUSE_S)
+        self.flash_error("%s\n%s" % (t("Card error"), last_error or t("No card")))
+        return None, None
+
+    def _verify_pin(self, card, pin, transport):
+        """Verify the PIN, re-presenting the card if the link was lost."""
+        for attempt in range(1, CARD_ACTION_RETRIES + 1):
+            try:
+                card.verify_pin(pin)
+                return card
+            except sk.SeedKeeperError as exc:
+                if exc.sw is not None:
+                    self.flash_error("%s\n%s" % (t("Card error"), exc))
+                    return None
+            if self._cancel_requested():
+                self.flash_text(t("Cancelled"))
+                return None
+            card, _ = self._card_session(transport)
+            if card is None:
+                return None
+        self.flash_error(t("Card error"))
+        return None
+
+    def _connect(self):
+        """Ask for the PIN, then present the card once and verify it.
+
+        The PIN is entered before the field is started so the card is only
+        needed for one uninterrupted select + secure-channel + verify
+        sequence.  Typing it while the card is held is what used to drop the
+        link and force a second presentation.
+
+        A blank card is the exception: the first status read is how we learn
+        it is blank, so the PIN is confirmed after that read and the card is
+        presented once more for setup.  That path only runs once per card.
         """
         transport = self._transport()
         if transport is None:
             return None
-        # The first command is what makes the reader start looking, and it
-        # blocks until the card is tapped or the wait times out. Without a
-        # line on screen saying so, that reads as a frozen app.
-        self.ctx.display.clear()
-        self.ctx.display.draw_centered_text(t("Tap your SeedKeeper card"))
-        try:
-            card = sk.SeedKeeper(transport)
-            card.select()
-        except sk.SeedKeeperError as exc:
-            self.flash_error(
-                t("No SeedKeeper applet\nInstall it first.")
-                if exc.sw == sk.SW_APPLET_NOT_FOUND
-                else "%s\n%s" % (t("Card error"), exc)
-            )
-            return None
-        try:
-            status = card.card_status()
-        except sk.SeedKeeperError as exc:
-            self.flash_error("%s\n%s" % (t("Card error"), exc))
-            return None
-        if status["setup_done"]:
+        while True:
             pin = self._prompt_pin(t("Card PIN"))
             if pin is None:
                 return None
+            card, status = self._card_session(transport)
+            if card is None:
+                return None
+            if status["setup_done"]:
+                return self._verify_pin(card, pin, transport)
+
+            # A blank card: confirm the PIN on a fresh screen, away from the
+            # card, then present it again for the setup write.
+            close = getattr(transport, "close", None)
+            if close is not None:
+                close()
+            confirmed = self.capture_from_keypad(
+                t("Confirm Card PIN"), PIN_KEYSETS, esc_prompt=True
+            )
+            if confirmed == ESC_KEY:
+                return None
+            if confirmed != pin:
+                self.flash_error(t("PINs did not match"))
+                continue
+            card, status = self._card_session(transport)
+            if card is None:
+                return None
+            if status["setup_done"]:
+                return self._verify_pin(card, pin, transport)
             try:
-                card.verify_pin(pin)
+                card.setup(pin)
             except sk.SeedKeeperError as exc:
                 self.flash_error("%s\n%s" % (t("Card error"), exc))
                 return None
+            self.flash_success(t("Card PIN set"))
             return card
-        pin = self._prompt_pin(t("New Card PIN"), t("Confirm Card PIN"))
-        if pin is None:
-            return None
-        try:
-            card.setup(pin)
-        except sk.SeedKeeperError as exc:
-            self.flash_error("%s\n%s" % (t("Card error"), exc))
-            return None
-        self.flash_success(t("Card PIN set"))
-        return card
+
+    def _reconnect(self, card):
+        """Re-present the card and redo select + secure channel + PIN."""
+        for attempt in range(1, CARD_ACTION_RETRIES + 1):
+            if not self._reader_prompt(card.transport, attempt):
+                return False
+            try:
+                if card._login_again():
+                    return True
+            except sk.SeedKeeperError as exc:
+                if exc.sw is not None:
+                    self.flash_error("%s\n%s" % (t("Card error"), exc))
+                    return False
+            if self._cancel_requested():
+                self.flash_text(t("Cancelled"))
+                return False
+            self._retry_screen(attempt)
+            time.sleep(CARD_RETRY_PAUSE_S)
+        return False
+
+    def _card_action(self, card, action):
+        """Run a read-only card action, re-presenting the card if needed.
+
+        The link drops after a few seconds without traffic and the first
+        secure command after a fresh activation is occasionally lost.  The
+        PIN verified by ``_connect`` is retained in the card object, so the
+        retry can select, redo the secure channel and re-verify without
+        asking the user to type it again.
+        """
+        last_error = None
+        for attempt in range(1, CARD_ACTION_RETRIES + 1):
+            try:
+                return action()
+            except sk.SeedKeeperError as exc:
+                last_error = exc
+                if exc.sw is not None:
+                    raise
+            if attempt == CARD_ACTION_RETRIES:
+                break
+            if not self._reconnect(card):
+                raise last_error
+        raise last_error
 
     # ---------------------------------------------------------------- secrets
 
@@ -193,7 +362,7 @@ class SeedKeeperPage(Page):
         """
         seeds = []
         try:
-            headers = card.list_secrets()
+            headers = self._card_action(card, card.list_secrets)
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))
             return None
@@ -245,7 +414,9 @@ class SeedKeeperPage(Page):
         from embit.bip39 import mnemonic_to_seed
 
         try:
-            _, secret = card.export_secret(header["id"])
+            _, secret = self._card_action(
+                card, lambda: card.export_secret(header["id"])
+            )
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))
             return None
@@ -301,12 +472,16 @@ class SeedKeeperPage(Page):
 
     def save_seed(self):
         """Handler for the 'Save Seed to Card' menu item"""
-        card = self._connect()
-        if card is None:
-            return MENU_CONTINUE
         key = self.ctx.wallet.key
+        # Ask for the label before the card is presented.  Typing it while
+        # the card is held is what used to drop the link and force another
+        # presentation; with the label already known, the card is only needed
+        # for one uninterrupted PIN + write session.
         label = self._prompt_label(key)
         if label is None:
+            return MENU_CONTINUE
+        card = self._connect()
+        if card is None:
             return MENU_CONTINUE
         try:
             secret_id, _ = self._write_seed(card, key, label)
@@ -322,7 +497,7 @@ class SeedKeeperPage(Page):
         if card is None:
             return MENU_CONTINUE
         try:
-            headers = card.list_secrets()
+            headers = self._card_action(card, card.list_secrets)
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))
             return MENU_CONTINUE
@@ -331,7 +506,8 @@ class SeedKeeperPage(Page):
             return MENU_CONTINUE
         for header in headers:
             self.flash_text(
-                "%s\n%s" % (self._secret_label(header), _type_name(header["type"]))
+                "%s\n%s" % (self._secret_label(header), _type_name(header["type"])),
+                duration=FLASH_MSG_TIME * 3,
             )
         return MENU_CONTINUE
 
@@ -341,7 +517,7 @@ class SeedKeeperPage(Page):
         if card is None:
             return MENU_CONTINUE
         try:
-            headers = card.list_secrets()
+            headers = self._card_action(card, card.list_secrets)
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))
             return MENU_CONTINUE
@@ -354,6 +530,9 @@ class SeedKeeperPage(Page):
         ):
             return MENU_CONTINUE
         try:
+            if not self._reconnect(card):
+                self.flash_error(t("Card error"))
+                return MENU_CONTINUE
             deleted = card.delete_secret(header["id"])
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))
@@ -367,7 +546,7 @@ class SeedKeeperPage(Page):
         if card is None:
             return MENU_CONTINUE
         try:
-            status = card.memory_status()
+            status = self._card_action(card, card.memory_status)
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))
             return MENU_CONTINUE
@@ -385,14 +564,16 @@ class SeedKeeperPage(Page):
         return MENU_CONTINUE
 
     def card_info(self):
-        """Handler for the 'Card Info' menu item"""
-        card = self._connect()
-        if card is None:
+        """Handler for the 'Card Info' menu item.
+
+        GET_STATUS is exempt from the secure-channel gate, so this is also
+        the quick way to check the card link without typing the PIN.
+        """
+        transport = self._transport()
+        if transport is None:
             return MENU_CONTINUE
-        try:
-            status = card.card_status()
-        except sk.SeedKeeperError as exc:
-            self.flash_error("%s\n%s" % (t("Card error"), exc))
+        card, status = self._card_session(transport)
+        if card is None:
             return MENU_CONTINUE
         self.flash_text(
             "%s\n%s %d.%d\n%s %d.%d"
@@ -452,10 +633,13 @@ class SeedKeeperPage(Page):
         needed = len(header) + sk.padded_size(secret)
         try:
             free = card.memory_status()["free_memory"]
-        except sk.SeedKeeperError:
+        except sk.SeedKeeperError as exc:
             # An applet that does not implement the status instruction cannot
             # report its room; let the card be the judge instead of refusing
-            # every write.
+            # every write.  A link failure, though, must stop here: starting
+            # an import after the card has gone away would only half-write it.
+            if exc.sw is None:
+                raise
             free = None
         if free is not None and needed > free:
             raise sk.SeedKeeperError(

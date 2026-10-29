@@ -160,6 +160,9 @@ POLL_WINDOW_MS = 8000
 # (time.sleep() takes seconds, not milliseconds)
 SETTLE_S = 0.3
 
+# how long the card is given after activation, before the first APDU
+ACTIVATE_SETTLE_S = 0.2
+
 # set to 1 to print every packet that goes to and from the chip
 DEBUG = 1
 
@@ -302,6 +305,7 @@ class IsoDepTransport:
         self.chip = None
         self.connected = False
         self.cid = None
+        self.prepared = False
 
     # -- the plumbing -----------------------------------------------------
 
@@ -367,12 +371,12 @@ class IsoDepTransport:
         chip.send(MT_CMD, GID_CORE, CORE_SET_CONFIG, SET_CONFIG_00)
         chip.send(MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS)
 
-        # No RF_DEACTIVATE here.  The vendor's trace has one, but our
-        # chip then reports the RF field as *off* (RF_FIELD_INFO_NTF
-        # with status 0x00) and never turns it back on, so the
-        # deactivate is what stops discovery, not what starts it.
-        # The discovery that is left running here is the one the
-        # chip polls with.
+        # Only one discovery here.  If the card is already in the field
+        # it can activate from this poll, and a deactivate now would
+        # throw that activation away.  _discover() restarts the poll
+        # (deactivate, routing, discover) if no tag shows up within a
+        # second, which is also what unsticks a chip that answers 0x06
+        # to every later RF_DISCOVER.
 
         # whatever the chip said in between
         for n in chip.notifications:
@@ -398,14 +402,14 @@ class IsoDepTransport:
         return pkt[2] == RF_TAG_NTF and pkt[3] == 2
 
     def _discover(self, timeout_ms):
-        """Wait for a tag while the discovery started by bring-up runs.
+        """Wait for a tag, restarting a poll that has gone quiet.
 
-        Do not stop and restart the discovery: the deactivate turns
-        the RF field off and RF_DISCOVER does not bring it back on
-        this chip.  Re-sending RF_DISCOVER while it is already
-        running is allowed (the chip answers 0x06 "already started"),
-        so a periodic re-send is only a safety net for a discovery
-        that has timed out on its own.
+        The chip polls in cycles, and a card that is presented between
+        cycles is not seen until the next one.  The vendor's stack
+        restarts the poll with RF_DEACTIVATE, RF_SET_ROUTING and
+        RF_DISCOVER; doing the same once a second finds the card
+        reliably.  Restarting much more often would interrupt the poll
+        it is in the middle of.
         """
         deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
         last_discover = time.ticks_ms()
@@ -426,6 +430,12 @@ class IsoDepTransport:
             now = time.ticks_ms()
             if time.ticks_diff(now, last_discover) >= DISCOVER_INTERVAL_MS:
                 last_discover = now
+                # Stop whatever poll is running, re-send the routing
+                # and start a fresh poll, exactly as the vendor's stack
+                # does.  RF_DISCOVER on its own returns 0x06 and does
+                # not bring the field back up.
+                self.chip.send(MT_CMD, GID_RF, RF_DEACTIVATE, bytes([0x00]))
+                self.chip.send(MT_CMD, GID_RF, RF_SET_ROUTING, RF_ROUTING)
                 rsp = self.chip.send(
                     MT_CMD, GID_RF, RF_DISCOVER, DISCOVER_PARAMS
                 )
@@ -537,6 +547,19 @@ class IsoDepTransport:
 
     # -- the contract -----------------------------------------------------
 
+    def prepare(self):
+        """Power up the reader and start polling, without waiting for a card.
+
+        The card on this phone is only discovered reliably when it enters a
+        field that is already polling.  The UI can call this first, show its
+        "tap now" prompt, and only then call ``connect``/``transmit``.
+        """
+        if self.chip is not None:
+            self.close()
+        self.chip = Chip().open()
+        self._bring_up()
+        self.prepared = True
+
     def connect(self, timeout_ms=TAG_TIMEOUT_MS):
         """Bring the chip up, poll, and activate the card that shows up.
 
@@ -556,15 +579,24 @@ class IsoDepTransport:
 
             attempt += 1
             try:
-                # A previous attempt may have left the node open (a link
-                # error marks us disconnected but does not close the fd),
-                # and the chip must be power-cycled from a clean state.
-                if self.chip is not None:
-                    self.close()
-                self.chip = Chip().open()
-                self._bring_up()
+                if self.prepared:
+                    # prepare() already powered the chip and started the
+                    # poll; keep that field running while the user taps.
+                    self.prepared = False
+                else:
+                    # A previous attempt may have left the node open (a link
+                    # error marks us disconnected but does not close the fd),
+                    # and the chip must be power-cycled from a clean state.
+                    if self.chip is not None:
+                        self.close()
+                    self.chip = Chip().open()
+                    self._bring_up()
                 ntf = self._discover(min(left, POLL_WINDOW_MS))
                 self._activate(ntf)
+                # The activation notification can arrive a little before the
+                # card is ready for the first APDU; without this, the first
+                # SELECT after a fresh field is sometimes answered with B2.
+                time.sleep(ACTIVATE_SETTLE_S)
                 self.connected = True
                 return self
             except CardTimeout:
@@ -591,6 +623,7 @@ class IsoDepTransport:
 
     def close(self):
         self.connected = False
+        self.prepared = False
         if self.chip is not None:
             self.chip.close()
             self.chip = None
