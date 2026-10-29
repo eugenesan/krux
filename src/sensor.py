@@ -1,18 +1,13 @@
 """
-sensor -- the camera, on the hammerhead.
+sensor -- the camera, on the hammerhead (Stage 3).
 
-The K210 boards have a camera on the CSI bus and MaixPy's `sensor`
-module drives it.  The hammerhead's camera (the IMX179) is behind the
-ISP, so the port's own camera path is the V4L2 one in the imaging
-server (standalone/cam) -- not a module the firmware can call.
-
-Until that path works, this module is a stand-in: it answers the
-firmware's questions about the camera (is there one? what are its
-sizes?) and raises a clear error when the firmware asks for a picture.
-The camera pages then say so, and the rest of the firmware works.
+Thin client of the camd daemon.  camd owns the V4L2 state machine and
+delivers QVGA frames over /data/krux/camd.sock.
 """
 
-# the MaixPy sensor constants the firmware uses
+import socket
+import time
+
 GRAYSCALE = 0
 RGB565 = 1
 BGR565 = 2
@@ -29,80 +24,124 @@ QVGA2 = 6
 QQCIF = 7
 SQCIF = 8
 
-# the hammerhead's rear camera: 3264x2448
-WIDTH = 3264
-HEIGHT = 2448
-
+WIDTH = 320
+HEIGHT = 240
 
 class SensorError(Exception):
-    """The camera is not available (yet)."""
+    pass
+
+_sock = None
+_camd_proc = None
+_pixformat = RGB565
 
 
-class sensor:
-    """The camera: the hammerhead's is driven by the imaging server."""
-
-    def __init__(self):
-        self.width = WIDTH
-        self.height = HEIGHT
-        self.pixformat = RGB565
-        self.framesize = VGA
-
-    def reset(self, freq=18200000, dual_buff=False, choice=None):
-        """The MaixPy reset: nothing to do here."""
-
-    def run(self, enable):
-        """The MaixPy run: the imaging server does the streaming."""
-
-    def get_id(self):
-        """The camera's chip id: the IMX179."""
-        return 0x179
-
-    def set_framesize(self, framesize):
-        """The picture size."""
-        self.framesize = framesize
-
-    def set_windowing(self, roi):
-        """A region of the picture."""
-
-    def set_pixformat(self, pixformat):
-        """The picture format."""
-        self.pixformat = pixformat
-
-    def set_hmirror(self, hmirror):
-        """Mirror the picture."""
-
-    def set_vflip(self, vflip):
-        """Flip the picture."""
-
-    def skip_frames(self, num=10, time=0):
-        """Throw the first frames away."""
-
-    def snapshot(self):
-        """Take a picture: the port's camera path is not there yet."""
-        raise SensorError(
-            "the camera is not available yet: the imaging server "
-            "(standalone/cam) is the port's camera path"
-        )
-
-    def close(self):
-        """Close the camera."""
+def _start_camd():
+    # camd must be started externally (no subprocess in MicroPython).
+    # Assume it is already running; just wait for the socket.
+    time.sleep(1)
 
 
-def get_id():
-    """The camera's chip id: the IMX179."""
-    return 0x179
+def _connect():
+    global _sock
+    if _sock is not None:
+        return
+    _start_camd()
+    _sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    path = "/data/krux/camd.sock"
+    addr = bytes([1, 0] + list(path.encode()) + [0] * (108 - len(path)))
+    _sock.connect(addr)
+    _sock.settimeout(5)
 
 
 def reset(freq=18200000, dual_buff=False, choice=None):
-    """The module level API MaixPy has."""
-    return sensor().reset(freq, dual_buff, choice)
+    global _sock
+    if _sock is not None:
+        try:
+            _sock.close()
+        except Exception:
+            pass
+        _sock = None
+    _connect()
+
+
+def get_id():
+    return 0x179
+
+
+def set_pixformat(f):
+    global _pixformat
+    _pixformat = f
+
+
+def set_framesize(f):
+    pass
+
+
+def set_windowing(roi):
+    pass
+
+
+def set_hmirror(v):
+    pass
+
+
+def set_vflip(v):
+    pass
+
+
+def skip_frames(num=10, time=0):
+    for _ in range(num):
+        snapshot()
 
 
 def run(enable):
-    """The module level API MaixPy has."""
-    return sensor().run(enable)
+    pass
 
 
 def snapshot():
-    """The module level API MaixPy has."""
-    return sensor().snapshot()
+    _connect()
+    try:
+        _sock.sendall(b"F")
+        hdr = b""
+        while len(hdr) < 32:
+            chunk = _sock.recv(32 - len(hdr))
+            if not chunk:
+                raise SensorError("connection closed")
+            hdr += chunk
+        y_bytes = 320 * 240
+        y = b""
+        while len(y) < y_bytes:
+            chunk = _sock.recv(y_bytes - len(y))
+            if not chunk:
+                raise SensorError("connection closed")
+            y += chunk
+        uv_bytes = 160 * 120 * 2
+        uv = b""
+        while len(uv) < uv_bytes:
+            chunk = _sock.recv(uv_bytes - len(uv))
+            if not chunk:
+                raise SensorError("connection closed")
+            uv += chunk
+    except Exception as e:
+        raise SensorError(str(e))
+    import image
+    img = image.Image.from_nv12(y + uv, 320, 240, 320, 160, 320, 240, 0)
+    return img
+
+
+def close():
+    global _sock
+    if _sock is not None:
+        try:
+            _sock.close()
+        except Exception:
+            pass
+        _sock = None
+
+
+def __write_reg(r, v):
+    pass
+
+
+# module-level aliases
+_Camera__write_reg = __write_reg
