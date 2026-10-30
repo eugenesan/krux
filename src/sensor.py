@@ -140,7 +140,41 @@ def close():
 
 
 def __write_reg(r, v):
-    pass
+    _connect()
+    try:
+        _sock.sendall(b"W" + bytes([(r >> 8) & 0xff, r & 0xff, v & 0xff]))
+        resp = _sock.recv(2)
+        if resp != b"OK":
+            raise SensorError("write_reg failed: %r" % resp)
+    except Exception as e:
+        raise SensorError(str(e))
+
+
+def set_exposure(lines):
+    """Set coarse integration time (exposure) in lines."""
+    __write_reg(0x0202, (lines >> 8) & 0xff)
+    __write_reg(0x0203, lines & 0xff)
+
+
+def set_gain(val):
+    """Set analog gain (0x0020-0x01ff)."""
+    __write_reg(0x0204, (val >> 8) & 0xff)
+    __write_reg(0x0205, val & 0xff)
+
+
+def set_exposure_gain(exposure_lines, gain_val):
+    """Set both exposure and gain in one transaction."""
+    _connect()
+    try:
+        _sock.sendall(b"E" + bytes([
+            (exposure_lines >> 8) & 0xff, exposure_lines & 0xff,
+            (gain_val >> 8) & 0xff, gain_val & 0xff,
+        ]))
+        resp = _sock.recv(2)
+        if resp != b"OK":
+            raise SensorError("set_exposure_gain failed: %r" % resp)
+    except Exception as e:
+        raise SensorError(str(e))
 
 
 # module-level aliases
