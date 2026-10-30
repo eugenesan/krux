@@ -177,5 +177,17 @@ def set_exposure_gain(exposure_lines, gain_val):
         raise SensorError(str(e))
 
 
+def set_vts(lines):
+    """Set frame length (VTS) to allow longer exposure."""
+    _connect()
+    try:
+        _sock.sendall(b"V" + bytes([(lines >> 8) & 0xff, lines & 0xff]))
+        resp = _sock.recv(2)
+        if resp != b"OK":
+            raise SensorError("set_vts failed: %r" % resp)
+    except Exception as e:
+        raise SensorError(str(e))
+
+
 # module-level aliases
 _Camera__write_reg = __write_reg
