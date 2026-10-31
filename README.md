@@ -87,8 +87,8 @@ uv sync --frozen
 
 This builds the **CPython** `uUR` extension from
 `firmware/micropython/lib/cUR`; you do **not** need to build the full
-MicroPython firmware to run the host test suite. A C compiler and Python development
-headers are required (`python3-dev` on Debian/Ubuntu).
+MicroPython firmware to run the host test suite. A C compiler and Python
+development headers are required (`python3-dev` on Debian/Ubuntu).
 
 Run the suite with:
 
@@ -96,6 +96,23 @@ Run the suite with:
 uv run poe test-simple
 # or a single file:
 uv run pytest tests/pages/test_login.py
+```
+
+If you do not want the virtual environment inside the Krux tree, set
+`UV_PROJECT_ENVIRONMENT` before both `uv sync` and `uv run`:
+
+```bash
+export UV_PROJECT_ENVIRONMENT=/tmp/opencode/krux-venv
+uv sync --frozen
+uv run poe test-simple
+```
+
+For one-off commands, repeat the variable rather than relying on the shell
+export:
+
+```bash
+UV_PROJECT_ENVIRONMENT=/tmp/opencode/krux-venv uv sync --frozen
+UV_PROJECT_ENVIRONMENT=/tmp/opencode/krux-venv uv run poe test-simple
 ```
 
 > **`uUR` is a C extension** If `lib/cUR` changes, rebuild it with

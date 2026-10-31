@@ -201,8 +201,17 @@ uv run poe test
 ```
 
 `uv sync` builds the CPython `uUR` extension from
-`firmware/micropython/lib/cUR`. If that submodule changes, rebuild the extension with
-`uv sync --frozen --reinstall-package uUR`.
+`firmware/micropython/lib/cUR`. If that submodule changes, rebuild the
+extension with `uv sync --frozen --reinstall-package uUR`.
+
+To keep the virtual environment outside the Krux tree, export
+`UV_PROJECT_ENVIRONMENT` before both `uv sync` and `uv run`:
+
+```bash
+export UV_PROJECT_ENVIRONMENT=/tmp/opencode/krux-venv
+uv sync --frozen
+uv run poe test
+```
 
 We aim for high test coverage (95% or more) on each PR. List all available
 tasks with `uv run poe`.
