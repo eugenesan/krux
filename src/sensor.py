@@ -33,12 +33,14 @@ class SensorError(Exception):
 _sock = None
 _camd_proc = None
 _pixformat = RGB565
+_last_seq = -1
+_last_snapshot_ms = 0
 
 
 def _start_camd():
-    # camd must be started externally (no subprocess in MicroPython).
-    # Assume it is already running; just wait for the socket.
-    time.sleep(1)
+    # camd is started by the firmware init (or by the test harness).
+    # There is no subprocess in MicroPython, so wait for its socket.
+    time.sleep(0.2)
 
 
 def _connect():
@@ -46,21 +48,32 @@ def _connect():
     if _sock is not None:
         return
     _start_camd()
-    _sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     path = "/data/krux/camd.sock"
     addr = bytes([1, 0] + list(path.encode()) + [0] * (108 - len(path)))
-    _sock.connect(addr)
-    _sock.settimeout(5)
+    last_error = None
+    for _ in range(80):
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(addr)
+            s.settimeout(5)
+            _sock = s
+            return
+        except OSError as e:
+            last_error = e
+            time.sleep(0.1)
+    raise SensorError("camd socket not ready: %s" % last_error)
 
 
 def reset(freq=18200000, dual_buff=False, choice=None):
-    global _sock
+    global _sock, _last_seq, _last_snapshot_ms
     if _sock is not None:
         try:
             _sock.close()
         except Exception:
             pass
         _sock = None
+    _last_seq = -1
+    _last_snapshot_ms = 0
     _connect()
 
 
@@ -95,48 +108,74 @@ def skip_frames(num=10, time=0):
 
 
 def run(enable):
-    pass
+    if enable:
+        _connect()
+    else:
+        close()
+
+
+def _recv_exact(n):
+    data = b""
+    while len(data) < n:
+        chunk = _sock.recv(n - len(data))
+        if not chunk:
+            raise SensorError("connection closed")
+        data += chunk
+    return data
 
 
 def snapshot():
+    global _last_seq, _last_snapshot_ms
     _connect()
-    try:
-        _sock.sendall(b"F")
-        hdr = b""
-        while len(hdr) < 32:
-            chunk = _sock.recv(32 - len(hdr))
-            if not chunk:
-                raise SensorError("connection closed")
-            hdr += chunk
-        y_bytes = 320 * 240
-        y = b""
-        while len(y) < y_bytes:
-            chunk = _sock.recv(y_bytes - len(y))
-            if not chunk:
-                raise SensorError("connection closed")
-            y += chunk
-        uv_bytes = 160 * 120 * 2
-        uv = b""
-        while len(uv) < uv_bytes:
-            chunk = _sock.recv(uv_bytes - len(uv))
-            if not chunk:
-                raise SensorError("connection closed")
-            uv += chunk
-    except Exception as e:
-        raise SensorError(str(e))
-    import image
-    img = image.Image.from_nv12(y + uv, 320, 240, 320, 160, 320, 240, 0)
-    return img
+    for _ in range(5000):
+        try:
+            _sock.sendall(b"F")
+            hdr = _recv_exact(32)
+            if hdr[:4] != b"KCF1":
+                raise SensorError("bad frame header")
+            if hdr[31] == 1:
+                # the daemon has no frame yet; it sent only the header
+                time.sleep_ms(2)
+                continue
+            seq = (
+                hdr[4]
+                | (hdr[5] << 8)
+                | (hdr[6] << 16)
+                | (hdr[7] << 24)
+            )
+            y = _recv_exact(320 * 240)
+            uv = _recv_exact(160 * 120 * 2)
+            if seq == _last_seq:
+                # the daemon returned the same buffer; wait for a new one
+                time.sleep_ms(1)
+                continue
+            _last_seq = seq
+            # The fallback daemon produces ~25 fps; Krux only needs 15.
+            now = time.ticks_ms()
+            elapsed = now - _last_snapshot_ms
+            if elapsed < 66:
+                time.sleep_ms(66 - elapsed)
+            _last_snapshot_ms = time.ticks_ms()
+            import image
+
+            return image.Image.from_nv12(
+                y + uv, 320, 240, 320, 160, 320, 240
+            )
+        except OSError as e:
+            raise SensorError(str(e))
+    raise SensorError("no new frame from camd")
 
 
 def close():
-    global _sock
+    global _sock, _last_seq, _last_snapshot_ms
     if _sock is not None:
         try:
             _sock.close()
         except Exception:
             pass
         _sock = None
+    _last_seq = -1
+    _last_snapshot_ms = 0
 
 
 def __write_reg(r, v):

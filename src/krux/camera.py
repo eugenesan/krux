@@ -37,6 +37,13 @@ ENTROPY_MODE = 2
 BINARY_GRID_MODE = 3
 ZOOMED_MODE = 4
 
+# The IMX179 preview mode starts at exposure 0x09d6 / gain 0x00a5.  The
+# vendor's AE mode uses VTS 0x0c4b, which leaves room to lengthen the
+# exposure without changing the sensor mode.
+DEFAULT_EXPOSURE = 0x09D6
+DEFAULT_GAIN = 0x00A5
+DEFAULT_VTS = 0x0C4B
+
 OV2640Z_OFFSET_X = 160
 OV2640Z_OFFSET_Y = 120
 OV2640Z_MAX_X = 400 // 4
@@ -344,6 +351,62 @@ class Camera:
         self.luminosity_threshold()
         return self.mode
 
+    def _auto_expose(self, mode):
+        """Converge exposure/gain and lock it for the capture session.
+
+        QR needs a mid-bright image with enough contrast; entropy needs a
+        mid-gray image with no clipped highlights.  This is deliberately
+        a small, bounded loop, not a full AE algorithm.
+        """
+        target = 0x80 if mode == ENTROPY_MODE else 0x60
+        exposure = DEFAULT_EXPOSURE
+        gain = DEFAULT_GAIN
+        vts = DEFAULT_VTS
+        try:
+            sensor.set_vts(vts)
+            sensor.set_exposure_gain(exposure, gain)
+        except Exception as e:
+            print("Camera exposure control unavailable:", e)
+            return
+
+        for _ in range(12):
+            img = sensor.snapshot()
+            stats = img.get_statistics()
+            mean = stats.l_mean()
+            clipped_low = stats.clipped_low()
+            clipped_high = stats.clipped_high()
+
+            if mode == ENTROPY_MODE and clipped_high > 0:
+                mean = target + 16
+            elif mode == ENTROPY_MODE and clipped_low > 0 and mean < target:
+                mean = target - 16
+
+            if abs(mean - target) <= 6 and clipped_high == 0:
+                break
+
+            if mean < target:
+                if gain < 0x01FF:
+                    gain = min(0x01FF, gain + 0x10)
+                elif exposure < vts - 8:
+                    exposure = min(vts - 8, exposure + 0x80)
+            else:
+                if exposure > 0x40:
+                    exposure = max(0x40, exposure - 0x80)
+                elif gain > 0x20:
+                    gain = max(0x20, gain - 0x10)
+
+            try:
+                sensor.set_exposure_gain(exposure, gain)
+            except Exception as e:
+                print("Camera exposure control failed:", e)
+                return
+
+        # Lock the converged values for the session.
+        try:
+            sensor.set_exposure_gain(exposure, gain)
+        except Exception as e:
+            print("Camera exposure lock failed:", e)
+
     def snapshot(self):
         """Helper to take a customized snapshot from sensor"""
         return sensor.snapshot()
@@ -355,6 +418,11 @@ class Camera:
         if self.mode != mode:
             self.initialize_sensor(mode=mode)
         sensor.run(1)
+        # Auto-exposure needs a camd with the W/E/V control commands.
+        # The current fallback (camd-fast) is the stable unpaced build and
+        # does not have them yet, so keep the fixed vendor exposure until
+        # the control-capable daemon is validated.
+        # self._auto_expose(mode)
 
     def stop_sensor(self):
         """Stops capturing from sensor"""
