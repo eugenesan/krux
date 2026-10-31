@@ -7,3 +7,6 @@
 [submodule "firmware/MaixPy"]
 	path = firmware/MaixPy
 	url = ../../selfcustody/MaixPy
+[submodule "firmware/micropython"]
+	path = firmware/micropython
+	url = https://github.com/eugenesan/micropython.git
