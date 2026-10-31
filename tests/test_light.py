@@ -1,51 +1,19 @@
-def mock_modules(mocker):
-    mocker.patch("krux.light.fm.register", new=mocker.MagicMock())
-    mocker.patch("krux.light.GPIO", new=mocker.MagicMock())
+def test_light_is_a_noop_on_the_phone():
+    """The Nexus port has no controllable white LED.
 
-
-def test_init(mocker, m5stickv):
-    mock_modules(mocker)
-    import krux
-    from krux.light import Light
-    import board
-
-    mocker.spy(Light, "turn_off")
-
-    light = Light()
-
-    assert isinstance(light, Light)
-    krux.light.fm.register.assert_called_with(
-        board.config["krux"]["pins"]["LED_W"], mocker.ANY
-    )
-    assert (
-        krux.light.fm.register.call_args.args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIO3"
-    )
-    assert light.circuit is not None
-    krux.light.GPIO.assert_called()
-    assert krux.light.GPIO.call_args.args[0]._extract_mock_name() == "mock.GPIO3"
-    light.turn_off.assert_called()
-
-
-def test_turn_on(mocker, m5stickv):
-    mock_modules(mocker)
+    Pages still use the Light singleton, so it must exist and accept the
+    same calls without touching MaixPy GPIO or the pin muxer.
+    """
     from krux.light import Light
 
     light = Light()
-    mocker.spy(light.circuit, "value")
-
-    light.turn_on()
-
-    light.circuit.value.assert_called_with(0)
+    assert light.circuit is None
+    assert light.turn_on() is None
+    assert light.turn_off() is None
 
 
-def test_turn_off(mocker, m5stickv):
-    mock_modules(mocker)
-    from krux.light import Light
+def test_light_singleton_is_available():
+    from krux.light import light
 
-    light = Light()
-    mocker.spy(light.circuit, "value")
-
-    light.turn_off()
-
-    light.circuit.value.assert_called_with(1)
+    assert light is not None
+    assert light.circuit is None

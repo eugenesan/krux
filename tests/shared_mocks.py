@@ -1,5 +1,6 @@
 from unittest import mock
 from unittest.mock import MagicMock
+import types
 import pyqrcode
 import zlib
 import base64
@@ -23,6 +24,42 @@ CUBE_WIDTH = 240
 CUBE_HEIGHT = 240
 CUBE_USABLE_WIDTH = DOCK_WIDTH - 2 * 10
 CUBE_IN_LINE = DOCK_USABLE_WIDTH // 8
+
+
+def mock_evdev_module():
+    """A small host stand-in for the port's ``evdev`` module.
+
+    Real evdev is not installed on the test host.  The port reads key and
+    touch events through the same four-call API, so a module with the right
+    constants and an empty read queue is enough for construction; individual
+    tests patch ``evdev.read``/``evdev.open`` to script event sequences.
+    """
+    module = types.ModuleType("evdev")
+    module.EV_SYN = 0
+    module.EV_KEY = 1
+    module.EV_ABS = 3
+    module.SYN_REPORT = 0
+    module.ABS_MT_SLOT = 0x2F
+    module.ABS_MT_TOUCH_MAJOR = 0x30
+    module.ABS_MT_POSITION_X = 0x35
+    module.ABS_MT_POSITION_Y = 0x36
+    module.ABS_MT_TRACKING_ID = 0x39
+    module.ABS_MT_PRESSURE = 0x3A
+    module.KEY_POWER = 116
+    module.KEY_VOLUMEUP = 115
+    module.KEY_VOLUMEDOWN = 114
+    module.KEY_VOLUME_UP = 115
+    module.KEY_VOLUME_DOWN = 114
+
+    def open_device(path):  # pylint: disable=invalid-name
+        return path
+
+    def read(_fd, _timeout):
+        return None
+
+    module.open = open_device
+    module.read = read
+    return module
 
 
 class MockFile:

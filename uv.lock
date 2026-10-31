@@ -321,7 +321,7 @@ requires-dist = [
     { name = "pyserial", marker = "extra == 'flash'", specifier = ">=3.5,<4" },
     { name = "pyzbar", marker = "extra == 'simulator'", specifier = ">=0.1.9,<1" },
     { name = "qrcode", marker = "extra == 'sign'", specifier = ">=8.2,<9" },
-    { name = "uur", directory = "firmware/MaixPy/components/micropython/port/src/bc-ur" },
+    { name = "uur", directory = "vendor/cUR" },
 ]
 provides-extras = ["docs", "simulator", "flash", "sign"]
 
@@ -962,7 +962,7 @@ wheels = [
 [[package]]
 name = "uur"
 version = "0.1.0"
-source = { directory = "firmware/MaixPy/components/micropython/port/src/bc-ur" }
+source = { directory = "vendor/cUR" }
 
 [[package]]
 name = "vulture"

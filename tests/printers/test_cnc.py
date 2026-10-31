@@ -220,6 +220,8 @@ def test_print_router_qr_code_with_row_cutmethod(mocker, m5stickv, mocker_sd_car
     import os
 
     import krux
+
+    mocker.patch("krux.printers.cnc.wdt.feed")
     from krux.krux_settings import Settings
     from krux.printers.cnc import FilePrinter
 
@@ -255,6 +257,8 @@ def test_print_router_qr_code_with_spiral_cutmethod(mocker, m5stickv, mocker_sd_
     import os
 
     import krux
+
+    mocker.patch("krux.printers.cnc.wdt.feed")
     from krux.krux_settings import Settings
     from krux.printers.cnc import FilePrinter
 
@@ -290,6 +294,8 @@ def test_print_router_qr_code_inverted(mocker, m5stickv, mocker_sd_card):
     import os
 
     import krux
+
+    mocker.patch("krux.printers.cnc.wdt.feed")
     from krux.krux_settings import Settings
     from krux.printers.cnc import FilePrinter
 
@@ -323,6 +329,8 @@ def test_print_laser_qr_code(mocker, m5stickv, mocker_sd_card):
     import os
 
     import krux
+
+    mocker.patch("krux.printers.cnc.wdt.feed")
     from krux.krux_settings import Settings
     from krux.printers.cnc import FilePrinter
 

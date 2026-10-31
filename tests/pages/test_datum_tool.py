@@ -570,21 +570,15 @@ def test_datumtool_view_qr(m5stickv, mocker):
     page.view_qr()
     assert ctx.input.wait_for_button.call_count == len(BTN_SEQUENCE)
 
-    # with unicode as a string doesn't work
-    ctx = create_ctx(mocker, [BUTTON_ENTER])
+    # The port replaces non-ASCII characters for the QR encoder rather than
+    # aborting; the update prompt and the QR view both consume a button.
+    ctx = create_ctx(mocker, [BUTTON_ENTER, BUTTON_ENTER])
     page = DatumTool(ctx)
     page.contents = unicode
     page.title = "QR contents"
     page.datum = None
     page.view_qr()
-    assert ctx.input.wait_for_button.call_count == 1
-    ctx.display.flash_text.assert_called_with(
-        "Failed encoding (('Static', (0,))), try as bytes. 'str' object has no attribute 'decode'",
-        248,
-        2000,
-        highlight_prefix="",
-    )
-    print(ctx.display.method_calls)
+    assert ctx.input.wait_for_button.call_count == 2
 
     # but can work if encoding unicode string as utf-8 bytes
     BTN_SEQUENCE = (

@@ -1,33 +1,69 @@
-from .shared_mocks import mock_context
 import pytest
 
 
-def test_auto_shutdown(m5stickv, mocker):
-    from krux.auto_shutdown import auto_shutdown, seconds_counter
-
-    ctx = mock_context(mocker)
-    auto_shutdown.add_ctx(ctx)
-
-    # Set the timeout to a value that will cause a shutdown in 2 seconds
-    auto_shutdown.time_out = 1
-
-    # Call the seconds_counter method to simulate the timer callback
-    # Check if SystemExit is raised
-    with pytest.raises(SystemExit):
-        # Mocking timer calls:
-        # Decrement the time_out value to 0
-        seconds_counter("dummy timer argument")
-        # Next timer call will shutdown the device
-        seconds_counter("dummy timer argument")
-
-
-def test_feed(m5stickv, mocker):
+@pytest.fixture
+def shutdown(mocker, m5stickv):
+    """The singleton with the state each test needs, and no real hardware."""
+    import time
     from krux.auto_shutdown import auto_shutdown
-    from krux.krux_settings import Settings
 
-    auto_shutdown.time_out = 1000
+    auto_shutdown.ctx = None
+    auto_shutdown.shutdown_time = 0
+    auto_shutdown.time_out = 0
+    auto_shutdown.idle = 0
+    auto_shutdown.backlight_off = False
+    auto_shutdown.last_tick = time.ticks_ms()
+    mocker.patch.object(auto_shutdown, "turn_the_backlight_off")
+    mocker.patch.object(auto_shutdown, "turn_the_backlight_on")
+    return auto_shutdown
 
-    # Call the feed method to reset the timeout
-    auto_shutdown.feed()
-    # Check if the timeout is reset to the value set in the settings
-    assert auto_shutdown.time_out == Settings().security.auto_shutdown * 60
+
+def test_seconds_counter_counts_only_elapsed_whole_seconds(mocker, shutdown):
+    from krux.auto_shutdown import seconds_counter
+
+    shutdown.shutdown_time = 10
+    shutdown.time_out = 10
+    shutdown.last_tick = 1000
+    mocker.patch("time.ticks_ms", return_value=2500)
+
+    seconds_counter("timer")
+
+    assert shutdown.time_out == 9
+    assert shutdown.last_tick == 2500
+    shutdown.turn_the_backlight_off.assert_not_called()
+
+
+def test_idle_deadline_turns_the_backlight_off(mocker, shutdown):
+    shutdown.shutdown_time = 10
+    shutdown.time_out = 0
+    shutdown.last_tick = 0
+    mocker.patch("time.ticks_ms", return_value=2000)
+
+    shutdown.seconds_counter()
+
+    assert shutdown.time_out == 0
+    shutdown.turn_the_backlight_off.assert_called()
+
+
+def test_feed_resets_timeout_and_idle_counter(mocker, shutdown):
+    shutdown.shutdown_time = 600
+    shutdown.time_out = 123
+    shutdown.idle = 42
+    mocker.patch("time.ticks_ms", return_value=shutdown.last_tick)
+
+    shutdown.feed()
+
+    assert shutdown.time_out == 600
+    assert shutdown.idle == 0
+    shutdown.turn_the_backlight_on.assert_called_once()
+
+
+def test_backlight_timeout_is_bounded(shutdown):
+    shutdown.shutdown_time = 0
+    assert shutdown.backlight_timeout() == 30
+
+    shutdown.shutdown_time = 1000
+    assert shutdown.backlight_timeout() == 30
+
+    shutdown.shutdown_time = 20
+    assert shutdown.backlight_timeout() == 4

@@ -7,3 +7,6 @@
 [submodule "firmware/MaixPy"]
 	path = firmware/MaixPy
 	url = ../../selfcustody/MaixPy
+[submodule "vendor/cUR"]
+	path = vendor/cUR
+	url = https://github.com/selfcustody/cUR.git

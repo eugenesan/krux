@@ -43,6 +43,8 @@ def test_clear(mocker, m5stickv, mock_uart_cls):
 def test_print_qr_code(mocker, amigo, mock_uart_cls):
     mocker.patch("krux.printers.thermal.UART", new=mock_uart_cls)
     import krux
+
+    mocker.patch("krux.printers.thermal.wdt.feed")
     from krux.printers.thermal import AdafruitPrinter
 
     p = AdafruitPrinter()

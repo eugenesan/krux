@@ -70,6 +70,7 @@ def _debug(message):
     except Exception:  # pylint: disable=W0703
         pass
 
+
 IDLE = 0
 PRESSED = 1
 RELEASED = 2
@@ -101,7 +102,6 @@ class Touch:
         self.new_touch = False
         self.index = 0
 
-
         # the menu's regions, in the firmware's terms: the boundaries
         # of the touch areas, in the display's pixels
         self.x_regions = []
@@ -127,10 +127,14 @@ class Touch:
 
     def add_y_delimiter(self, region):
         """Adds a y delimiter to the touch region"""
+        if region > self.width:
+            raise ValueError("Touch region added outside display area")
         self.y_regions.append(region)
 
     def add_x_delimiter(self, region):
         """Adds an x delimiter to the touch region"""
+        if region > self.height:
+            raise ValueError("Touch region added outside display area")
         self.x_regions.append(region)
 
     def set_regions(self, x_list=None, y_list=None):

@@ -1,159 +1,109 @@
 import pytest
 
 
-@pytest.fixture
-def mock_tactile_buttons(mocker):
-    from krux.buttons import fm, buttons_control
-
-    mocker.patch.object(fm, "register")
-    mock_gpio = mocker.MagicMock()
-    mocker.patch("Maix.GPIO", return_value=mock_gpio)
-
-    def fake_init_enter(pin):
-        buttons_control.enter = mock_gpio
-
-    def fake_init_page(pin):
-        buttons_control.page = mock_gpio
-
-    def fake_init_page_prev(pin):
-        buttons_control.page_prev = mock_gpio
-
-    mocker.patch.object(buttons_control, "init_enter", fake_init_enter)
-    mocker.patch.object(buttons_control, "init_page", fake_init_page)
-    mocker.patch.object(buttons_control, "init_page_prev", fake_init_page_prev)
-
-    buttons_control.enter_event_flag = False
-    buttons_control.page_event_flag = False
-    buttons_control.page_prev_event_flag = False
-
-    mocker.spy(buttons_control, "event_handler")
-
-    return buttons_control
-
-
-def test_handler(mocker, m5stickv, mock_tactile_buttons):
-    from krux.buttons import __handler__
-
-    calls = []
-    for pin in [10, 11, 12]:
-        __handler__(pin)
-        calls.append(mocker.call(pin))
-
-    mock_tactile_buttons.event_handler.assert_has_calls(calls)
-
-
-def test_tactile_buttons_initialization(mocker, m5stickv):
-    from krux.buttons import buttons_control
-
-    assert buttons_control.enter is None
-    assert buttons_control.page is None
-    assert buttons_control.page_prev is None
-    assert not buttons_control.enter_event_flag
-    assert not buttons_control.page_event_flag
-    assert not buttons_control.page_prev_event_flag
-
-
-def test_generic_button_default_values(mocker, m5stickv, mock_tactile_buttons):
+def test_generic_button_default_values(m5stickv):
     from krux.buttons import Button, RELEASED
 
     button = Button()
-
-    # Assert button methods return default values
     assert button.value() == RELEASED
     assert not button.event()
-    mock_tactile_buttons.event_handler.assert_not_called()
 
 
-def test_generic_button_enter_default_values(mocker, m5stickv, mock_tactile_buttons):
-    from krux.buttons import ButtonEnter, RELEASED
+def test_key_value_and_event_follow_evdev(mocker, m5stickv):
+    import evdev
+    from krux.buttons import _Key, PRESSED, RELEASED
 
-    mocker.patch.object(mock_tactile_buttons, "init_enter", lambda pin: None)
-    button = ButtonEnter(mock_tactile_buttons.enter)
-
-    # Assert button enter methods return default values
-    assert button.value() == RELEASED
-    assert not button.event()
-    mock_tactile_buttons.event_handler.assert_not_called()
-
-
-def test_generic_button_page_default_values(mocker, m5stickv, mock_tactile_buttons):
-    from krux.buttons import ButtonPage, RELEASED
-
-    mocker.patch.object(mock_tactile_buttons, "init_page", lambda pin: None)
-    button = ButtonPage(mock_tactile_buttons.enter)
-
-    # Assert button page methods return default values
-    assert button.value() == RELEASED
-    assert not button.event()
-    mock_tactile_buttons.event_handler.assert_not_called()
-
-
-def test_generic_button_page_prev_default_values(
-    mocker, m5stickv, mock_tactile_buttons
-):
-    from krux.buttons import ButtonPagePrev, RELEASED
-
-    mocker.patch.object(mock_tactile_buttons, "init_page_prev", lambda pin: None)
-    button = ButtonPagePrev(mock_tactile_buttons.enter)
-
-    # Assert button page prev methods return default values
-    assert button.value() == RELEASED
-    assert not button.event()
-    mock_tactile_buttons.event_handler.assert_not_called()
-
-
-def test_button_enter(mocker, m5stickv, mock_tactile_buttons):
-    from krux.buttons import ButtonEnter
-
-    mock_tactile_buttons.enter = 10
-    button = ButtonEnter(mock_tactile_buttons.enter)
-
-    # Simulate button pressed
-    mock_tactile_buttons.event_handler(mock_tactile_buttons.enter)
-
-    # When button is pressed, an interrupt is generated and button_event_flag is set.
-    # When button.event() method is called, it will return True if there has been an event,
-    # but before returning, it will clear button_event_flag.
-    assert button.event()
-    assert not mock_tactile_buttons.enter_event_flag
-    mock_tactile_buttons.event_handler.assert_called_once_with(
-        mock_tactile_buttons.enter
+    key = _Key(10, evdev.KEY_POWER)
+    mocker.patch(
+        "evdev.read",
+        side_effect=[
+            (evdev.EV_KEY, evdev.KEY_POWER, 1),
+            None,
+            None,
+            None,
+        ],
     )
+    assert key.value() == PRESSED
+    assert key.event() is True
+    assert key.event() is False
 
-
-def test_button_page(mocker, m5stickv, mock_tactile_buttons):
-    from krux.buttons import ButtonPage
-
-    mock_tactile_buttons.page = 11
-    button = ButtonPage(mock_tactile_buttons.page)
-
-    # Simulate button pressed
-    mock_tactile_buttons.event_handler(mock_tactile_buttons.page)
-
-    # When button is pressed, an interrupt is generated and button_event_flag is set.
-    # When button.event() method is called, it will return True if there has been an event,
-    # but before returning, it will clear button_event_flag.
-    assert button.event()
-    assert not mock_tactile_buttons.page_event_flag
-    mock_tactile_buttons.event_handler.assert_called_once_with(
-        mock_tactile_buttons.page
+    mocker.patch(
+        "evdev.read",
+        side_effect=[
+            (evdev.EV_KEY, evdev.KEY_POWER, 0),
+            None,
+        ],
     )
+    assert key.value() == RELEASED
 
 
-def test_button_page_prev(mocker, m5stickv, mock_tactile_buttons):
-    from krux.buttons import ButtonPagePrev
+def test_key_ignores_other_keys_and_event_types(mocker, m5stickv):
+    import evdev
+    from krux.buttons import _Key, RELEASED
 
-    mock_tactile_buttons.page_prev = 12
-    button = ButtonPagePrev(mock_tactile_buttons.page_prev)
-
-    # Simulate button pressed
-    mock_tactile_buttons.event_handler(mock_tactile_buttons.page_prev)
-
-    # When button is pressed, an interrupt is generated and button_event_flag is set.
-    # When button.event() method is called, it will return True if there has been an event,
-    # but before returning, it will clear button_event_flag.
-    assert button.event()
-    assert not mock_tactile_buttons.page_prev_event_flag
-    mock_tactile_buttons.event_handler.assert_called_once_with(
-        mock_tactile_buttons.page_prev
+    key = _Key(10, evdev.KEY_POWER)
+    mocker.patch(
+        "evdev.read",
+        side_effect=[
+            (evdev.EV_KEY, evdev.KEY_VOLUMEUP, 1),
+            (evdev.EV_ABS, evdev.KEY_POWER, 1),
+            None,
+            None,
+        ],
     )
+    assert key.value() == RELEASED
+    assert key.event() is False
+
+
+def test_button_wrappers_delegate_to_the_open_key(mocker, m5stickv):
+    import evdev
+    from krux import buttons
+
+    key = mocker.MagicMock()
+    key.value.return_value = buttons.PRESSED
+    key.event.return_value = True
+    mocker.patch.object(buttons.buttons_control, "enter", key)
+
+    button = buttons.ButtonEnter(10)
+    assert button.value() == buttons.PRESSED
+    assert button.event() is True
+    key.value.assert_called_once()
+    key.event.assert_called_once()
+
+
+def test_m5stickv_keys_are_opened_from_board_pins(m5stickv):
+    import board
+    from krux.buttons import buttons_control
+
+    pins = board.config["krux"]["pins"]
+    assert buttons_control.enter.fd == pins["BUTTON_A"]
+    assert buttons_control.page.fd == pins["BUTTON_B"]
+    assert buttons_control.page_prev is None
+
+
+def test_amigo_opens_all_three_keys(amigo):
+    import board
+    from krux.buttons import buttons_control
+
+    pins = board.config["krux"]["pins"]
+    assert buttons_control.enter.fd == pins["BUTTON_A"]
+    assert buttons_control.page.fd == pins["BUTTON_B"]
+    assert buttons_control.page_prev.fd == pins["BUTTON_C"]
+
+
+def test_missing_board_key_is_none(m5stickv):
+    # m5stickv has no BUTTON_C: the port must not create a phantom key.
+    from krux.buttons import buttons_control
+
+    assert buttons_control.page_prev is None
+
+
+def test_key_poll_flushes_the_display(mocker, m5stickv):
+    import evdev
+    import lcd
+    from krux.buttons import _Key
+
+    key = _Key(10, evdev.KEY_POWER)
+    mocker.patch("evdev.read", return_value=None)
+    key.value()
+    lcd.flush.assert_called()

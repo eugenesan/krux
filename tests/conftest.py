@@ -18,6 +18,7 @@ from .shared_mocks import (
     base32_encode,
     base43_decode,
     base43_encode,
+    mock_evdev_module,
 )
 
 
@@ -58,6 +59,7 @@ def mp_modules(mocker, monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "secp256k1", mocker.MagicMock(wraps=secp256k1))
     monkeypatch.setitem(sys.modules, "urandom", random)
+    monkeypatch.setitem(sys.modules, "evdev", mock_evdev_module())
     monkeypatch.setitem(sys.modules, "flash", mocker.MagicMock())
     monkeypatch.setitem(sys.modules, "machine", mocker.MagicMock())
     monkeypatch.setitem(sys.modules, "sensor", mocker.MagicMock())
@@ -84,6 +86,13 @@ def mp_modules(mocker, monkeypatch):
     monkeypatch.setattr(
         time, "ticks_ms", mocker.MagicMock(return_value=1), raising=False
     )
+    # CPython has no MicroPython ticks arithmetic.  The port modules call
+    # these on device, so tests need the same simple 32-bit-wrap-free
+    # semantics for host timestamps.
+    monkeypatch.setattr(
+        time, "ticks_add", lambda ticks, delta: ticks + delta, raising=False
+    )
+    monkeypatch.setattr(time, "ticks_diff", lambda a, b: a - b, raising=False)
     monkeypatch.setattr(sys, "print_exception", mocker.MagicMock(), raising=False)
     monkeypatch.setitem(
         sys.modules,

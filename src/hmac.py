@@ -11,6 +11,7 @@ and `HMAC(key, msg=None, digestmod=None)`, with `update`, `digest`,
 """
 
 import hashlib
+
 try:
     import crypto_fast as _cf
 except Exception:
@@ -31,8 +32,17 @@ class HMAC:
             name = digestmod
             try:
                 import uhashlib_hw
+
                 if name == "sha512":
-                    digestmod = uhashlib_hw._FastSHA512 if hasattr(uhashlib_hw, "_FastSHA512") else (uhashlib_hw.sha512 if hasattr(uhashlib_hw, "sha512") else None)
+                    digestmod = (
+                        uhashlib_hw._FastSHA512
+                        if hasattr(uhashlib_hw, "_FastSHA512")
+                        else (
+                            uhashlib_hw.sha512
+                            if hasattr(uhashlib_hw, "sha512")
+                            else None
+                        )
+                    )
                 elif name == "sha256":
                     digestmod = hashlib.sha256
                 elif name == "sha1":
@@ -47,7 +57,12 @@ class HMAC:
         self.digestmod = digestmod
         # sha512 uses 128-byte blocks
         try:
-            self.block_size = 128 if getattr(digestmod, "block_size", 64) == 128 or digestmod in (uhashlib_hw.sha512,) else 64
+            self.block_size = (
+                128
+                if getattr(digestmod, "block_size", 64) == 128
+                or digestmod in (uhashlib_hw.sha512,)
+                else 64
+            )
         except Exception:
             self.block_size = 64
         self._outer = self._inner = None
@@ -101,3 +116,22 @@ class HMAC:
 def new(key, msg=None, digestmod=None):
     """A new keyed hashing object."""
     return HMAC(key, msg, digestmod)
+
+
+def compare_digest(a, b):
+    """Compare two digests without leaking where they differ.
+
+    CPython's ``secrets`` imports this from ``hmac`` while collecting the
+    host tests.  MicroPython has no stdlib hmac at all, so the port's shim
+    has to provide it as well as the HMAC constructor.
+    """
+    if isinstance(a, str):
+        a = a.encode()
+    if isinstance(b, str):
+        b = b.encode()
+    if len(a) != len(b):
+        return False
+    result = 0
+    for x, y in zip(a, b):
+        result |= x ^ y
+    return result == 0

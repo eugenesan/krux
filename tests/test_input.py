@@ -15,7 +15,12 @@ def mock_timer_ticks(step=100):
 
 def reset_input_states(mocker, input):
     """Reset the input states to avoid any previous state to interfere with the tests"""
+    import krux.input
     from krux.input import RELEASED
+
+    # The port's watchdog is a real object, not machine.WDT's MagicMock.
+    # Tests assert that polling feeds it, so give it a mock method.
+    mocker.patch.object(krux.input.wdt, "feed")
 
     if input.enter:
         mocker.patch.object(input, "enter_value", return_value=RELEASED)
@@ -27,286 +32,52 @@ def reset_input_states(mocker, input):
         mocker.patch.object(input, "page_prev_value", return_value=RELEASED)
         mocker.patch.object(input, "page_prev_event", return_value=False)
     if input.touch:
-        mocker.patch.object(
-            input.touch.touch_driver, "current_point", return_value=None
-        )
         mocker.patch.object(input.touch, "event", return_value=False)
     return input
 
 
-def test_init_m5stickv(mocker, m5stickv):
-    mocker.patch("krux.buttons.fm.register", new=mocker.MagicMock())
-    mocker.patch("krux.buttons.GPIO", new=mocker.MagicMock())
-    import krux
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["m5stickv", "amigo", "dock", "cube", "yahboom", "wonder_mv"],
+)
+def test_input_initializes_on_board(request, mocker, fixture_name):
+    """Every board's port input stack can be constructed.
+
+    The K210 init tests asserted the MaixPy GPIO/fm registrations.  The
+    Nexus port uses evdev keys and, on touch boards, evdev touch points;
+    those APIs are covered in test_buttons.py and test_touch.py.  Here the
+    important compatibility contract is that Input() still builds the
+    button/touch/encoder members the pages expect.
+    """
+    request.getfixturevalue(fixture_name)
     from krux.input import Input
-    import board
 
     input = Input()
-
     assert isinstance(input, Input)
-    krux.buttons.fm.register.assert_has_calls(
-        [
-            mocker.call(board.config["krux"]["pins"]["BUTTON_A"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["BUTTON_B"], mocker.ANY),
-        ]
-    )
-    assert (
-        krux.buttons.fm.register.call_args_list[0].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS21"
-    )
-    assert (
-        krux.buttons.fm.register.call_args_list[1].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS22"
-    )
+
+
+def test_m5stickv_has_the_power_and_volume_keys(mocker, m5stickv):
+    from krux.input import Input
+
+    input = Input()
     assert input.enter is not None
     assert input.page is not None
 
-    assert krux.buttons.GPIO.call_count == 2
-    assert (
-        krux.buttons.GPIO.call_args_list[0].args[0]._extract_mock_name()
-        == "mock.GPIOHS21"
-    )
-    assert (
-        krux.buttons.GPIO.call_args_list[1].args[0]._extract_mock_name()
-        == "mock.GPIOHS22"
-    )
 
-
-def test_init_amigo(mocker, amigo):
-    mocker.patch("krux.buttons.fm.register", new=mocker.MagicMock())
-    mocker.patch("krux.buttons.GPIO", new=mocker.MagicMock())
-    import krux
+def test_amigo_has_all_tactile_keys(mocker, amigo):
     from krux.input import Input
-    import board
 
     input = Input()
-
-    assert isinstance(input, Input)
-    krux.buttons.fm.register.assert_has_calls(
-        [
-            mocker.call(board.config["krux"]["pins"]["BUTTON_A"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["BUTTON_B"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["BUTTON_C"], mocker.ANY),
-        ]
-    )
-    assert (
-        krux.buttons.fm.register.call_args_list[0].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS21"
-    )
-    assert (
-        krux.buttons.fm.register.call_args_list[1].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS22"
-    )
-    assert (
-        krux.buttons.fm.register.call_args_list[2].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS0"
-    )
     assert input.enter is not None
     assert input.page is not None
     assert input.page_prev is not None
 
-    assert krux.buttons.GPIO.call_count == 3
-    assert (
-        krux.buttons.GPIO.call_args_list[0].args[0]._extract_mock_name()
-        == "mock.GPIOHS21"
-    )
-    assert (
-        krux.buttons.GPIO.call_args_list[1].args[0]._extract_mock_name()
-        == "mock.GPIOHS22"
-    )
-    assert (
-        krux.buttons.GPIO.call_args_list[2].args[0]._extract_mock_name()
-        == "mock.GPIOHS0"
-    )
 
-
-def test_init_dock(mocker, dock):
-    mocker.patch("krux.buttons.fm.register", new=mocker.MagicMock())
-    mocker.patch("krux.buttons.GPIO", new=mocker.MagicMock())
-    import krux
+def test_touch_board_builds_a_touch_screen(mocker, amigo):
     from krux.input import Input
-    import board
 
     input = Input()
-
-    assert isinstance(input, Input)
-    krux.buttons.fm.register.assert_has_calls(
-        [
-            mocker.call(board.config["krux"]["pins"]["BUTTON_A"], mocker.ANY),
-        ]
-    )
-    krux.rotary.fm.register.assert_has_calls(
-        [
-            mocker.call(board.config["krux"]["pins"]["ENCODER"][0], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["ENCODER"][1], mocker.ANY),
-        ]
-    )
-    assert (
-        krux.buttons.fm.register.call_args_list[0].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS21"
-    )
-    assert (
-        krux.rotary.fm.register.call_args_list[1].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS22"
-    )
-    assert (
-        krux.rotary.fm.register.call_args_list[2].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS0"
-    )
-    assert input.enter is not None
-    assert input.page is not None
-    assert input.page_prev is not None
-
-    assert krux.buttons.GPIO.call_count == 1
-    assert krux.rotary.GPIO.call_count == 2
-    assert (
-        krux.buttons.GPIO.call_args_list[0].args[0]._extract_mock_name()
-        == "mock.GPIOHS21"
-    )
-    assert (
-        krux.rotary.GPIO.call_args_list[0].args[0]._extract_mock_name()
-        == "mock.GPIO.GPIOHS22"
-    )
-    assert (
-        krux.rotary.GPIO.call_args_list[1].args[0]._extract_mock_name()
-        == "mock.GPIO.GPIOHS0"
-    )
-
-
-def test_init_cube(mocker, cube):
-    mocker.patch("krux.buttons.fm.register", new=mocker.MagicMock())
-    mocker.patch("krux.buttons.GPIO", new=mocker.MagicMock())
-    from krux import buttons
-    from krux.input import Input
-    import board
-
-    input = Input()
-
-    assert isinstance(input, Input)
-
-    for button in buttons.fm.register.call_args_list:
-        print(button)
-
-    buttons.fm.register.assert_has_calls(
-        [
-            mocker.call(board.config["krux"]["pins"]["BUTTON_A"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["BUTTON_B"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["BUTTON_C"], mocker.ANY),
-        ]
-    )
-
-    assert (
-        buttons.fm.register.call_args_list[0].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS21"
-    )
-    assert (
-        buttons.fm.register.call_args_list[1].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS22"
-    )
-    assert (
-        buttons.fm.register.call_args_list[2].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS0"
-    )
-
-    assert input.enter is not None
-    assert input.page is not None
-    assert input.page_prev is not None
-
-    assert buttons.GPIO.call_count == 3
-    assert (
-        buttons.GPIO.call_args_list[0].args[0]._extract_mock_name() == "mock.GPIOHS21"
-    )
-    assert (
-        buttons.GPIO.call_args_list[1].args[0]._extract_mock_name() == "mock.GPIOHS22"
-    )
-
-
-def test_init_yahboom(mocker, yahboom):
-    mocker.patch("krux.buttons.fm.register", new=mocker.MagicMock())
-    mocker.patch("krux.buttons.GPIO", new=mocker.MagicMock())
-    from krux import buttons
-    from krux.input import Input
-    import board
-
-    input = Input()
-
-    assert isinstance(input, Input)
-
-    buttons.fm.register.assert_has_calls(
-        [
-            mocker.call(board.config["krux"]["pins"]["BUTTON_B"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["BUTTON_C"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["TOUCH_IRQ"], mocker.ANY),
-        ]
-    )
-
-    assert (
-        buttons.fm.register.call_args_list[0].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS22"
-    )
-    assert (
-        buttons.fm.register.call_args_list[1].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS0"
-    )
-    assert (
-        buttons.fm.register.call_args_list[2].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS1"
-    )
-
-    assert input.enter is None
-    assert input.page is not None
-    assert input.page_prev is not None
-
-    assert buttons.GPIO.call_count == 2
-    assert (
-        buttons.GPIO.call_args_list[0].args[0]._extract_mock_name() == "mock.GPIOHS22"
-    )
-    assert buttons.GPIO.call_args_list[1].args[0]._extract_mock_name() == "mock.GPIOHS0"
-
-
-def test_init_wonder_mv(mocker, wonder_mv):
-    mocker.patch("krux.buttons.fm.register", new=mocker.MagicMock())
-    mocker.patch("krux.buttons.GPIO", new=mocker.MagicMock())
-    from krux import buttons
-    from krux.input import Input
-    import board
-
-    input = Input()
-
-    assert isinstance(input, Input)
-
-    buttons.fm.register.assert_has_calls(
-        [
-            mocker.call(board.config["krux"]["pins"]["BUTTON_A"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["BUTTON_B"], mocker.ANY),
-            mocker.call(board.config["krux"]["pins"]["TOUCH_IRQ"], mocker.ANY),
-        ]
-    )
-
-    assert (
-        buttons.fm.register.call_args_list[0].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS21"
-    )
-    assert (
-        buttons.fm.register.call_args_list[1].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS22"
-    )
-    assert (
-        buttons.fm.register.call_args_list[2].args[1]._extract_mock_name()
-        == "mock.fm.fpioa.GPIOHS1"
-    )
-
-    assert input.enter is not None
-    assert input.page is not None
-    assert input.page_prev is None
-
-    assert buttons.GPIO.call_count == 2
-    assert (
-        buttons.GPIO.call_args_list[0].args[0]._extract_mock_name() == "mock.GPIOHS21"
-    )
-    assert (
-        buttons.GPIO.call_args_list[1].args[0]._extract_mock_name() == "mock.GPIOHS22"
-    )
+    assert input.touch is not None
 
 
 def test_enter_value_released_when_none(mocker, m5stickv):
@@ -632,93 +403,58 @@ def test_long_press_page_prev_simulates_fast_backwar(mocker, m5stickv):
     krux.input.wdt.feed.assert_called()
 
 
-def test_touch_indexing(mocker, amigo):
+def test_touch_press_returns_touch(mocker, amigo):
     import krux
-    from krux.input import Input, BUTTON_TOUCH
+    from krux.input import Input, BUTTON_TOUCH, RELEASED
 
     input = Input()
     input = reset_input_states(mocker, input)
-
+    mocker.patch.object(krux.input.wdt, "feed")
     mocker.patch.object(time, "ticks_ms", side_effect=mock_timer_ticks())
 
-    def mock_points(point1, point2):
-        mocker.patch.object(input.touch, "event", side_effect=[False, True, False])
-        mocker.patch.object(input.touch.touch_driver, "irq_point", return_value=point1)
-        mocker.patch.object(
-            input.touch.touch_driver,
-            "current_point",
-            side_effect=[None, point1, point2, None, None],
-        )
+    mocker.patch.object(input, "touch_event", return_value=True)
+    mocker.patch.object(input, "touch_value", return_value=RELEASED)
+    for swipe in (
+        "swipe_right_value",
+        "swipe_left_value",
+        "swipe_up_value",
+        "swipe_down_value",
+    ):
+        mocker.patch.object(input, swipe, return_value=RELEASED)
 
-    # Full screen as single touch button
-    input.touch.clear_regions()
-    mock_points((75, 150), (77, 152))
-    btn = input.wait_for_button(True)
-    assert btn == BUTTON_TOUCH
-    assert input.touch.current_index() == 0
-    assert input.entropy > 0
-    krux.input.wdt.feed.assert_called()
-
-    # 2x2 array (4 quadrants) 200x200 pxls
-    mock_points((75, 150), (77, 152))
-    input.touch.add_y_delimiter(50)
-    input.touch.add_y_delimiter(100)
-    input.touch.add_y_delimiter(200)
-    input.touch.add_x_delimiter(50)
-    input.touch.add_x_delimiter(100)
-    input.touch.add_x_delimiter(200)
-    print("2nd case")
-    btn = input.wait_for_button(True)
-
-    assert btn == BUTTON_TOUCH
-    assert input.touch.current_index() == 2  # (3º quadrant)
+    assert input.wait_for_button(True) == BUTTON_TOUCH
 
 
-def test_touch_gestures(mocker, amigo):
+@pytest.mark.parametrize(
+    "swipe,expected",
+    [
+        ("swipe_right_value", 4),
+        ("swipe_left_value", 5),
+        ("swipe_up_value", 6),
+        ("swipe_down_value", 7),
+    ],
+)
+def test_touch_gestures(mocker, amigo, swipe, expected):
     import krux
-    from krux.input import Input, SWIPE_LEFT, SWIPE_RIGHT, SWIPE_UP, SWIPE_DOWN
+    from krux.input import Input, PRESSED, RELEASED
 
     input = Input()
     input = reset_input_states(mocker, input)
-
+    mocker.patch.object(krux.input.wdt, "feed")
     mocker.patch.object(time, "ticks_ms", side_effect=mock_timer_ticks())
 
-    def mock_points(point1, point2):
-        mocker.patch.object(input.touch, "event", side_effect=[False, True, False])
-        mocker.patch.object(input.touch.touch_driver, "irq_point", return_value=point1)
-        mocker.patch.object(
-            input.touch.touch_driver,
-            "current_point",
-            side_effect=[None, point1, point2, None, None],
-        )
+    mocker.patch.object(input, "touch_event", return_value=True)
+    mocker.patch.object(input, "touch_value", return_value=RELEASED)
+    for name in (
+        "swipe_right_value",
+        "swipe_left_value",
+        "swipe_up_value",
+        "swipe_down_value",
+    ):
+        mocker.patch.object(input, name, return_value=RELEASED)
+    mocker.patch.object(input, swipe, return_value=PRESSED)
 
-    # Swipe Right
-    input.touch.clear_regions()
-    mock_points((75, 150), (175, 152))
-    btn = input.wait_for_button(True)
-    assert btn == SWIPE_RIGHT
-    krux.input.wdt.feed.assert_called()
-
-    # Swipe Left
-    input.touch.clear_regions()
-    mock_points((175, 150), (75, 152))
-    btn = input.wait_for_button(True)
-    assert btn == SWIPE_LEFT
-    krux.input.wdt.feed.assert_called()
-
-    # Swipe Up
-    input.touch.clear_regions()
-    mock_points((75, 150), (75, 50))
-    btn = input.wait_for_button(True)
-    assert btn == SWIPE_UP
-    krux.input.wdt.feed.assert_called()
-
-    # Swipe Down
-    input.touch.clear_regions()
-    mock_points((75, 50), (75, 150))
-    btn = input.wait_for_button(True)
-    assert btn == SWIPE_DOWN
-    krux.input.wdt.feed.assert_called()
+    assert input.wait_for_button(True) == expected
 
 
 def test_invalid_touch_delimiter(mocker, amigo):
@@ -771,6 +507,7 @@ def test_encoder_spin_right(mocker, dock):
     from krux.input import Input, RELEASED, BUTTON_PAGE
 
     input = Input()
+    mocker.patch.object(krux.input.wdt, "feed")
     mocker.patch.object(input.enter, "value", return_value=RELEASED)
     mocker.patch.object(time, "ticks_ms", side_effect=mock_timer_ticks())
 
@@ -805,6 +542,7 @@ def test_encoder_spin_left(mocker, dock):
     from krux.input import Input, RELEASED, BUTTON_PAGE_PREV
 
     input = Input()
+    mocker.patch.object(krux.input.wdt, "feed")
     mocker.patch.object(input.enter, "value", return_value=RELEASED)
     mocker.patch.object(time, "ticks_ms", side_effect=mock_timer_ticks())
 
