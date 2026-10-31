@@ -1,12 +1,12 @@
 [submodule "embit"]
 	path = vendor/embit
 	url = ../../eugenesan/embit
+[submodule "micropython"]
+	path = firmware/micropython
+	url = ../../eugenesan/micropython
 [submodule "firmware/Kboot"]
 	path = firmware/Kboot
 	url = ../../selfcustody/Kboot
 [submodule "firmware/MaixPy"]
 	path = firmware/MaixPy
 	url = ../../selfcustody/MaixPy
-[submodule "firmware/micropython"]
-	path = firmware/micropython
-	url = https://github.com/eugenesan/micropython.git
