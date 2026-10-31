@@ -66,12 +66,44 @@ To build and flash the firmware:
 The first time, the build can take around an hour or so to complete. Subsequent builds should take only a few minutes. If all goes well, you should see a new `build` folder containing `firmware.bin` and `kboot.kfpkg` files when the build completes.
 
 ## Install Krux and dev tools
-Krux uses [uv](https://docs.astral.sh/uv/) for Python packaging and environment management. Install uv by following its [installation guide](https://docs.astral.sh/uv/getting-started/installation/), then sync the project to install runtime deps ([embit](https://github.com/diybitcoinhardware/embit) and [uUR](https://github.com/selfcustody/cUR), the native UR module compiled from the same sources the devices run) along with the `dev` group ([pytest](https://docs.pytest.org), [pylint](https://pypi.org/project/pylint/), [black](https://github.com/psf/black) and i18n helpers):
+Krux uses [uv](https://docs.astral.sh/uv/) for Python packaging and environment management. Install uv by following its [installation guide](https://docs.astral.sh/uv/getting-started/installation/), then sync the project to install runtime deps ([embit](https://github.com/diybitcoinhardware/embit) and [uUR](https://github.com/selfcustody/cUR), the native UR module compiled from the same sources the devices run) along with the `dev` group ([pytest](https://docs.pytest.org), [pylint](https://pypi.org/project/pylint/), [black](https://github.com/psf/black) and i18n helpers).
+
+### First test-suite setup
+
+The Nexus layout keeps cUR inside our MicroPython fork, at
+`micropython/lib/cUR`. From the **Nexus project root**, initialize the
+MicroPython submodule and its cUR submodule:
+
 ```bash
+git submodule update --init micropython
+git -C micropython submodule update --init lib/cUR
+```
+
+Then install the host environment from the Krux directory:
+
+```bash
+cd krux
 uv sync --frozen
 ```
 
-> **`uUR` is a C extension** It is built from the `bc-ur` submodule nested under `firmware/MaixPy`, so clone with `--recursive` (or run `git submodule update --init --recursive`) and make sure a C compiler and the Python development headers are installed (`python3-dev` on Debian/Ubuntu). After changing the submodule, rebuild it with `uv sync --frozen --reinstall-package uUR`.
+This builds the **CPython** `uUR` extension from
+`../micropython/lib/cUR`; you do **not** need to build the full MicroPython
+firmware to run the host test suite. A C compiler and Python development
+headers are required (`python3-dev` on Debian/Ubuntu).
+
+Run the suite with:
+
+```bash
+uv run poe test-simple
+# or a single file:
+uv run pytest tests/pages/test_login.py
+```
+
+> **`uUR` is a C extension** If `lib/cUR` changes, rebuild it with
+> `uv sync --frozen --reinstall-package uUR`. The firmware has a separate
+> build step, `scripts/build/build-micropython.sh` from the Nexus project
+> root; it uses the same `micropython/lib/cUR` source and stages a copy for
+> the MicroPython cross-build.
 
 `uv sync --frozen` creates a `.venv` in the project root and installs exactly what `uv.lock` pins **without re-resolving** — this is the day-to-day command and it matches what CI runs, so your local dependency versions stay reproducible. When dependencies in `pyproject.toml` change and you want to refresh the pins, run `uv lock` (updates `uv.lock` only) followed by `uv sync` (without `--frozen`, so it applies the new pins to the venv).
 
