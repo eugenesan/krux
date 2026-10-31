@@ -75,12 +75,11 @@ package = false
 
 [tool.uv.sources]
 embit = { path = "vendor/embit", editable = true }
-# Native BC-UR module. Keeping cUR as a direct submodule means host tests do
-# not depend on the much larger MaixPy tree; the firmware still builds its own
-# pinned copy from firmware/MaixPy. Not editable: it is a C extension, so it
-# has to be rebuilt (uv sync --reinstall-package uUR) after changing the
-# submodule anyway.
-uUR = { path = "vendor/cUR" }
+# Native BC-UR module. cUR is a submodule of our MicroPython fork, so the
+# firmware and host tests share the same source. Not editable: it is a C
+# extension, so it has to be rebuilt (uv sync --reinstall-package uUR) after
+# changing the submodule anyway.
+uUR = { path = "../micropython/lib/cUR" }
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
