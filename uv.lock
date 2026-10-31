@@ -321,7 +321,7 @@ requires-dist = [
     { name = "pyserial", marker = "extra == 'flash'", specifier = ">=3.5,<4" },
     { name = "pyzbar", marker = "extra == 'simulator'", specifier = ">=0.1.9,<1" },
     { name = "qrcode", marker = "extra == 'sign'", specifier = ">=8.2,<9" },
-    { name = "uur", directory = "../micropython/lib/cUR" },
+    { name = "uur", directory = "firmware/micropython/lib/cUR" },
 ]
 provides-extras = ["docs", "simulator", "flash", "sign"]
 
@@ -962,7 +962,7 @@ wheels = [
 [[package]]
 name = "uur"
 version = "0.1.0"
-source = { directory = "../micropython/lib/cUR" }
+source = { directory = "firmware/micropython/lib/cUR" }
 
 [[package]]
 name = "vulture"

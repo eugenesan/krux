@@ -185,25 +185,23 @@ rules enforced by CI:
 ## Testing
 
 The host test suite needs the cUR submodule from our MicroPython fork; it
-does **not** need a full MicroPython firmware build. From the Nexus project
+does **not** need a full MicroPython firmware build. From the Krux repository
 root, initialize it once:
 
 ```bash
-git submodule update --init micropython
-git -C micropython submodule update --init lib/cUR
+git submodule update --init firmware/micropython
+git -C firmware/micropython submodule update --init lib/cUR
 ```
 
-Then, from the Krux directory, install the host environment and run the
-tests:
+Then install the host environment and run the tests:
 
 ```bash
-cd krux
 uv sync --frozen
 uv run poe test
 ```
 
 `uv sync` builds the CPython `uUR` extension from
-`micropython/lib/cUR`. If that submodule changes, rebuild the extension with
+`firmware/micropython/lib/cUR`. If that submodule changes, rebuild the extension with
 `uv sync --frozen --reinstall-package uUR`.
 
 We aim for high test coverage (95% or more) on each PR. List all available

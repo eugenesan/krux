@@ -71,24 +71,23 @@ Krux uses [uv](https://docs.astral.sh/uv/) for Python packaging and environment 
 ### First test-suite setup
 
 The Nexus layout keeps cUR inside our MicroPython fork, at
-`micropython/lib/cUR`. From the **Nexus project root**, initialize the
-MicroPython submodule and its cUR submodule:
+`firmware/micropython/lib/cUR`. From the **Krux repository root**, initialize
+the MicroPython submodule and its cUR submodule:
 
 ```bash
-git submodule update --init micropython
-git -C micropython submodule update --init lib/cUR
+git submodule update --init firmware/micropython
+git -C firmware/micropython submodule update --init lib/cUR
 ```
 
-Then install the host environment from the Krux directory:
+Then install the host environment:
 
 ```bash
-cd krux
 uv sync --frozen
 ```
 
 This builds the **CPython** `uUR` extension from
-`../micropython/lib/cUR`; you do **not** need to build the full MicroPython
-firmware to run the host test suite. A C compiler and Python development
+`firmware/micropython/lib/cUR`; you do **not** need to build the full
+MicroPython firmware to run the host test suite. A C compiler and Python development
 headers are required (`python3-dev` on Debian/Ubuntu).
 
 Run the suite with:
@@ -102,8 +101,8 @@ uv run pytest tests/pages/test_login.py
 > **`uUR` is a C extension** If `lib/cUR` changes, rebuild it with
 > `uv sync --frozen --reinstall-package uUR`. The firmware has a separate
 > build step, `scripts/build/build-micropython.sh` from the Nexus project
-> root; it uses the same `micropython/lib/cUR` source and stages a copy for
-> the MicroPython cross-build.
+> root; it uses the same `firmware/micropython/lib/cUR` source and stages a
+> copy for the MicroPython cross-build.
 
 `uv sync --frozen` creates a `.venv` in the project root and installs exactly what `uv.lock` pins **without re-resolving** — this is the day-to-day command and it matches what CI runs, so your local dependency versions stay reproducible. When dependencies in `pyproject.toml` change and you want to refresh the pins, run `uv lock` (updates `uv.lock` only) followed by `uv sync` (without `--frozen`, so it applies the new pins to the venv).
 
