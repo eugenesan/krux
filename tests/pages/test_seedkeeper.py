@@ -73,6 +73,30 @@ def make_page(page_cls, mocker):
 
 
 @pytest.fixture
+def make_new_page(page_cls, mocker):
+    """A page whose load callback builds the wallet a real editor would."""
+
+    def _make(load_status=None):
+        from embit.networks import NETWORKS
+        from krux.key import Key, TYPE_SINGLESIG
+        from krux.pages import MENU_EXIT
+        from krux.wallet import Wallet
+
+        ctx = create_ctx(mocker, (0,))
+        if load_status is not None:
+            page = page_cls(ctx, lambda words, *a, **k: load_status)
+            return page, ctx
+
+        def load(words):
+            ctx.wallet = Wallet(Key(" ".join(words), TYPE_SINGLESIG, NETWORKS["main"]))
+            return MENU_EXIT
+
+        return page_cls(ctx, load), ctx
+
+    return _make
+
+
+@pytest.fixture
 def keypad(page_cls, mocker):
     """Answer every keypad capture with a PIN."""
     return mocker.patch.object(page_cls, "capture_from_keypad", return_value="123456")
@@ -100,6 +124,16 @@ def messages(page_cls, mocker):
     )
     mocker.patch.object(
         page_cls, "flash_success", side_effect=lambda t, **k: collected.append(t)
+    )
+    return collected
+
+
+@pytest.fixture
+def infos(page_cls, mocker):
+    """Every information screen the page showed, without waiting for OK."""
+    collected = []
+    mocker.patch.object(
+        page_cls, "_info_menu", side_effect=lambda text: collected.append(text)
     )
     return collected
 
@@ -347,6 +381,90 @@ class TestLoadSeed:
         assert loaded == [MNEMONIC]
 
 
+class TestNewMnemonic:
+    def test_card_entropy_becomes_a_loadable_mnemonic(
+        self, reader, sk, make_new_page, keypad, messages
+    ):
+        from embit.bip39 import mnemonic_from_bytes
+        from krux.pages import MENU_EXIT
+
+        keypad.side_effect = ["newseed", "123456"]
+        page, ctx = make_new_page()
+        assert page.create_new_mnemonic(12) == MENU_EXIT
+        expected = mnemonic_from_bytes(bytes(range(16)))
+        assert ctx.wallet.key.mnemonic == expected
+
+        headers = sk.SeedKeeper(reader).list_secrets()
+        assert len(headers) == 1
+        assert headers[0]["label"] == "newseed"
+        assert headers[0]["subtype"] == sk.SUBTYPE_BIP39
+        _, secret = export_seed(reader, headers[0]["id"])
+        entropy, passphrase = sk.unpack_bip39_secret(secret)
+        assert entropy == bytes(range(16))
+        assert passphrase == ""
+        assert "Secret 2 saved" in messages
+
+    def test_a_24_word_mnemonic_uses_32_bytes_of_card_entropy(
+        self, reader, sk, make_new_page, keypad
+    ):
+        from embit.bip39 import mnemonic_from_bytes
+        from krux.pages import MENU_EXIT
+
+        keypad.side_effect = ["newseed", "123456"]
+        page, ctx = make_new_page()
+        assert page.create_new_mnemonic(24) == MENU_EXIT
+        assert ctx.wallet.key.mnemonic == mnemonic_from_bytes(bytes(range(32)))
+        headers = sk.SeedKeeper(reader).list_secrets()
+        _, secret = export_seed(reader, headers[0]["id"])
+        assert sk.unpack_bip39_secret(secret)[0] == bytes(range(32))
+
+    def test_an_old_applet_falls_back_to_ins_a0(
+        self, reader, sk, make_new_page, keypad
+    ):
+        from embit.bip39 import mnemonic_from_bytes
+        from krux.pages import MENU_EXIT
+
+        reader.random_secret_supported = False
+        keypad.side_effect = ["newseed", "123456"]
+        page, ctx = make_new_page()
+        assert page.create_new_mnemonic(12) == MENU_EXIT
+        assert ctx.wallet.key.mnemonic == mnemonic_from_bytes(bytes(range(16)))
+        assert any(apdu[1] == 0xA0 for apdu in reader.apdus)
+        assert len(reader.secrets) == 1
+
+    def test_cancelling_the_editor_removes_the_temporary_secret(
+        self, reader, make_new_page, keypad
+    ):
+        from krux.pages import MENU_CONTINUE
+
+        keypad.side_effect = ["newseed", "123456"]
+        page, _ = make_new_page(load_status=MENU_CONTINUE)
+        assert page.create_new_mnemonic(12) == MENU_CONTINUE
+        assert reader.secrets == {}
+
+    def test_cancelling_the_label_never_touches_the_card(
+        self, reader, make_new_page, keypad
+    ):
+        from krux.pages import ESC_KEY, MENU_CONTINUE
+
+        keypad.side_effect = [ESC_KEY]
+        page, _ = make_new_page()
+        assert page.create_new_mnemonic(12) == MENU_CONTINUE
+        assert reader.apdus == []
+
+    def test_the_new_mnemonic_menu_offers_the_card(self, reader, m5stickv, mocker):
+        from krux.pages.login import Login
+
+        from krux.pages import MENU_CONTINUE
+
+        ctx = create_ctx(mocker, (1,))
+        menu = mocker.patch("krux.pages.login.Menu")
+        menu.return_value.run_loop.return_value = (0, MENU_CONTINUE)
+        Login(ctx).new_key()
+        labels = [item[0] for item in menu.call_args.args[1]]
+        assert "Via SeedKeeper Card" in labels
+
+
 class TestSaveSeed:
     def test_the_seed_reaches_the_card_with_its_passphrase(
         self, reader, sk, make_page, keypad, wallet
@@ -429,32 +547,59 @@ class TestSaveSeed:
 
 
 class TestInspection:
+    def test_info_screen_waits_for_a_deliberate_dismissal(
+        self, reader, page_cls, mocker
+    ):
+        from krux.input import BUTTON_ENTER
+
+        ctx = create_ctx(mocker, (BUTTON_ENTER,))
+        page = page_cls(ctx, None)
+        page._info_menu("something to read")
+        assert ctx.input.wait_for_button.call_count == 1
+
     def test_free_space_reports_the_cards_own_numbers(
-        self, reader, sk, make_page, keypad, messages
+        self, reader, sk, make_page, keypad, infos
     ):
         page, _ = make_page()
         page.free_space()
         status = sk.SeedKeeper(reader).memory_status()
-        assert messages[0].splitlines()[0] == "Free Space"
-        assert "%s bytes" % status["free_memory"] in messages[0]
-        assert "%s bytes" % status["total_memory"] in messages[0]
-        assert "0 secrets" in messages[0]
+        assert infos[0].splitlines()[0] == "Free Space"
+        assert "%s bytes" % status["free_memory"] in infos[0]
+        assert "%s bytes" % status["total_memory"] in infos[0]
+        assert "0 secrets" in infos[0]
 
     def test_card_info_names_the_protocol_and_applet(
-        self, reader, make_page, keypad, messages
+        self, reader, make_page, keypad, infos
     ):
         page, _ = make_page()
         page.card_info()
-        assert "Card Info" in messages[0]
-        assert "Protocol 0.2" in messages[0]
+        assert "Card Info" in infos[0]
+        assert "Protocol 0.2" in infos[0]
 
-    def test_viewing_secrets_names_each_one(self, reader, make_page, keypad, messages):
+    def test_viewing_secrets_lists_them_and_shows_the_chosen_one(
+        self, reader, page_cls, keypad, infos, m5stickv, mocker
+    ):
+        from krux.input import BUTTON_ENTER, BUTTON_PAGE
+
         store_seed(reader, label="cold")
         store_seed(reader, label="hot")
-        page, _ = make_page()
+        ctx = create_ctx(
+            mocker,
+            (
+                BUTTON_ENTER,
+                BUTTON_PAGE,
+                BUTTON_ENTER,
+                BUTTON_PAGE,
+                BUTTON_PAGE,
+                BUTTON_ENTER,
+            ),
+        )
+        page = page_cls(ctx, lambda words, *a, **k: None)
+        # The picker is a menu, not a timed flash.  First cold, then hot,
+        # then Back; each selection opens the touch-dismissed detail screen.
         page.view_secrets()
-        assert "cold" in messages[0] and "Master Seed" in messages[0]
-        assert "hot" in messages[1]
+        assert "cold" in infos[0] and "Master Seed" in infos[0]
+        assert "hot" in infos[1]
 
     def test_an_empty_card_says_it_holds_nothing(
         self, reader, make_page, keypad, errors

@@ -68,6 +68,12 @@ class FakeCard:
         self.next_id = 1
         self.apdus = []
         self.pending = None
+        # INS A3 is newer than the v0.1 applet.  Tests that need the old
+        # behaviour turn it off and exercise the INS A0 fallback.
+        self.random_secret_supported = True
+        # Deterministic bytes so a page test can predict the mnemonic while
+        # still exercising the same "card chose the entropy" path.
+        self.generated_entropy = bytes(range(64))
 
     def transmit(self, apdu):
         self.apdus.append(bytes(apdu))
@@ -123,6 +129,12 @@ class FakeCard:
             self.pin = apdu[17 : 17 + apdu[16]].decode("utf-8")
             self.setup_done = True
             return self._ok()
+        if ins == 0xA3:
+            if not self.random_secret_supported:
+                return self._fail(0x6D00)
+            return self._generate_random_secret(apdu)
+        if ins == 0xA0:
+            return self._generate_masterseed(apdu)
         if ins == 0xA6:
             order = sorted(self.secrets.items())
             if p2 == 0x01:
@@ -145,6 +157,50 @@ class FakeCard:
             del self.secrets[sid]
             return self._ok()
         return self._fail(0x6D00)
+
+    def _generate_random_secret(self, apdu):
+        secret_size = apdu[2]
+        data = list(apdu[5:])
+        if len(data) < 4:
+            return self._fail(0x6C00)
+        secret_type = data[0]
+        subtype = data[1]
+        label_size = data[3]
+        label = bytes(data[4 : 4 + label_size]).decode("utf-8")
+        offset = 4 + label_size
+        if offset >= len(data):
+            return self._fail(0x6C00)
+        entropy_size = data[offset]
+        if offset + 1 + entropy_size > len(data):
+            return self._fail(0x6C00)
+        secret = self.generated_entropy[:secret_size]
+        return self._store_generated(secret_type, subtype, apdu[3], label, secret)
+
+    def _generate_masterseed(self, apdu):
+        seed_size = apdu[2]
+        data = list(apdu[5:])
+        if not data:
+            return self._fail(0x6C00)
+        label_size = data[0]
+        label = bytes(data[1 : 1 + label_size]).decode("utf-8")
+        secret = self.generated_entropy[:seed_size]
+        return self._store_generated(0x10, 0x00, apdu[3], label, secret)
+
+    def _store_generated(self, secret_type, subtype, export_rights, label, secret):
+        sid = self.next_id
+        self.next_id += 1
+        label_bytes = list(label.encode("utf-8"))
+        header = (
+            [sid >> 8, sid & 0xFF, secret_type, 0x02, export_rights]
+            + [0, 0, 0]
+            + [0, 0, 0, 0]
+            + [subtype, 0x00, len(label_bytes)]
+            + label_bytes
+        )
+        payload = [len(secret)] + list(secret)
+        self.secrets[sid] = (header, payload)
+        fingerprint = secret_fingerprint(payload)
+        return self._ok([sid >> 8, sid & 0xFF] + list(bytes.fromhex(fingerprint)))
 
     def _import(self, apdu, p2):
         if not self.setup_done:
@@ -463,6 +519,69 @@ class TestDelete:
         assert full < before
         keeper.delete_secret(1)
         assert keeper.memory_status()["free_memory"] == before
+
+
+class TestGenerate:
+    def test_generate_random_secret_uses_the_a3_layout(self, keeper, card):
+        from krux.seedkeeper import (
+            CLA,
+            EXPORT_PLAINTEXT_ALLOWED,
+            INS_GENERATE_RANDOM_SECRET,
+            secret_fingerprint,
+        )
+
+        secret_id, fingerprint = keeper.generate_random_secret(
+            16,
+            label="tmp",
+            subtype=0x02,
+            external_entropy=b"abc",
+            save_entropy=True,
+        )
+        apdu = card.apdus[-1]
+        assert apdu[0] == CLA
+        assert apdu[1] == INS_GENERATE_RANDOM_SECRET
+        assert apdu[2] == 16
+        assert apdu[3] == EXPORT_PLAINTEXT_ALLOWED
+        data = list(apdu[5:])
+        assert data[:4] == [TYPE_MASTERSEED, 0x02, 0x01, 3]
+        assert data[4:7] == list(b"tmp")
+        assert data[7] == 3
+        assert data[8:11] == list(b"abc")
+        _, secret = keeper.export_secret(secret_id)
+        assert secret == bytes([16]) + card.generated_entropy[:16]
+        assert fingerprint == secret_fingerprint(secret)
+
+    def test_generate_masterseed_uses_the_a0_layout(self, keeper, card):
+        from krux.seedkeeper import (
+            CLA,
+            INS_GENERATE_MASTERSEED,
+        )
+
+        secret_id, _ = keeper.generate_masterseed(32, label="old")
+        apdu = card.apdus[-1]
+        assert apdu[0] == CLA
+        assert apdu[1] == INS_GENERATE_MASTERSEED
+        assert apdu[2] == 32
+        assert list(apdu[5:]) == [3] + list(b"old")
+        _, secret = keeper.export_secret(secret_id)
+        assert secret == bytes([32]) + card.generated_entropy[:32]
+
+    def test_generate_refuses_sizes_the_applet_cannot_make(self, keeper):
+        for size in (15, 65):
+            with pytest.raises(ValueError):
+                keeper.generate_random_secret(size)
+            with pytest.raises(ValueError):
+                keeper.generate_masterseed(size)
+
+    def test_generate_refuses_entropy_larger_than_the_secret(self, keeper):
+        with pytest.raises(ValueError):
+            keeper.generate_random_secret(16, external_entropy=b"x" * 17)
+
+    def test_generate_refuses_a_label_the_card_cannot_hold(self, keeper):
+        with pytest.raises(ValueError):
+            keeper.generate_random_secret(16, label="x" * 65)
+        with pytest.raises(ValueError):
+            keeper.generate_masterseed(16, label="x" * 65)
 
 
 class TestTransportFailures:

@@ -44,13 +44,14 @@ from . import (
     Page,
     Menu,
     MENU_CONTINUE,
+    MENU_EXIT,
     ESC_KEY,
     DIGITS,
     LETTERS,
     UPPERCASE_LETTERS,
 )
 from ..krux_settings import t
-from ..display import FLASH_MSG_TIME
+from ..display import DEFAULT_PADDING, FONT_HEIGHT
 from .. import seedkeeper as sk
 
 # Keysets for the card PIN and for a secret's label. The official Satochip
@@ -296,6 +297,10 @@ class SeedKeeperPage(Page):
                 return self._verify_pin(card, pin, transport)
             try:
                 card.setup(pin)
+                # setup() installs the PIN but does not validate it.  The
+                # commands that follow (list, generate, import) need a
+                # validated PIN, so log in once now that it exists.
+                card.verify_pin(pin)
             except sk.SeedKeeperError as exc:
                 self.flash_error("%s\n%s" % (t("Card error"), exc))
                 return None
@@ -397,6 +402,40 @@ class SeedKeeperPage(Page):
             return None
         return headers[index]
 
+    def _info_menu(self, text):
+        """Show information, then wait for a deliberate dismissal.
+
+        A fixed-duration flash is wrong for information the user may need to
+        read twice: a card label, a fingerprint or a byte count.  Drawing the
+        text above a one-item menu leaves the screen up until the user taps
+        OK (or presses enter on a button-only device).
+        """
+        self.ctx.display.clear()
+        self.ctx.display.draw_hcentered_text(text, DEFAULT_PADDING)
+        menu = Menu(
+            self.ctx,
+            [(t("OK"), lambda: MENU_EXIT)],
+            back_label=None,
+            offset=self.ctx.display.height() - 2 * FONT_HEIGHT,
+        )
+        menu.run_loop()
+        try:
+            self.ctx.input.reset_ios_state()
+        except Exception:  # input is optional on some boards
+            pass
+
+    def _secret_details(self, header):
+        """The one-secret screen shown after picking it from View Secrets."""
+        kind = _type_name(header["type"])
+        if header["subtype"] == sk.SUBTYPE_BIP39:
+            kind += " (BIP-39)"
+        return "%s\n%s\nID %d\n%s" % (
+            self._secret_label(header),
+            kind,
+            header["id"],
+            header["fingerprint"],
+        )
+
     def _decode_secret(self, card, header):
         """Read a seed secret -> (mnemonic, stored passphrase), or None.
 
@@ -470,6 +509,71 @@ class SeedKeeperPage(Page):
             self.flash_error(t("Card holds a passphrase.\nSet it after loading."))
         return self.load_key_fn(mnemonic.split())
 
+    def create_new_mnemonic(self, len_mnemonic):
+        """Generate a new BIP-39 mnemonic with the card's RNG.
+
+        The card generates 16 or 32 random bytes (INS A3, or the deprecated
+        INS A0 on an older applet).  Those bytes are the BIP-39 entropy: the
+        words are derived here, loaded through the normal new-wallet flow, and
+        only then written back to the card in the standard BIP-39 format.
+
+        Writing after the editor, rather than before it, matters: the editor
+        can change the words, and a card copy of the pre-edit mnemonic would
+        quietly disagree with the wallet the user just confirmed.  The
+        temporary on-card entropy secret is removed once the final secret is
+        stored.
+        """
+        if self.load_key_fn is None:
+            self.flash_error(t("Wallet is already loaded"))
+            return MENU_CONTINUE
+        if len_mnemonic not in (12, 24):
+            return MENU_CONTINUE
+
+        # Ask for the label before presenting the card, as save_seed() does.
+        # Typing while the card is held is what drops the NFC link.
+        label = self._prompt_label(default="Krux")
+        if label is None:
+            return MENU_CONTINUE
+
+        card = self._connect()
+        if card is None:
+            return MENU_CONTINUE
+
+        temp_id = None
+        try:
+            temp_id, entropy = self._generate_card_entropy(
+                card, 16 if len_mnemonic == 12 else 32
+            )
+            from embit.bip39 import mnemonic_from_bytes
+
+            words = mnemonic_from_bytes(entropy).split()
+            del entropy
+        except (sk.SeedKeeperError, ValueError) as exc:
+            self._discard_temp(card, temp_id)
+            self.flash_error("%s\n%s" % (t("Card error"), exc))
+            return MENU_CONTINUE
+
+        status = self.load_key_fn(words)
+        if status != MENU_EXIT or self.ctx.wallet is None:
+            # Backing out of the editor leaves no wallet to store.
+            self._discard_temp(card, temp_id)
+            return status
+
+        # The editor may have changed the words or added a passphrase.  Store
+        # the wallet that was actually created, not the pre-edit suggestion.
+        if not self._reconnect(card):
+            self.flash_error(t("Card error"))
+            return status
+        try:
+            secret_id, _ = self._write_seed(card, self.ctx.wallet.key, label)
+            card.delete_secret(temp_id)
+        except sk.SeedKeeperError as exc:
+            self._discard_temp(card, temp_id)
+            self.flash_error("%s\n%s" % (t("Card error"), exc))
+            return status
+        self.flash_success(t("Secret %d saved") % secret_id)
+        return status
+
     def save_seed(self):
         """Handler for the 'Save Seed to Card' menu item"""
         key = self.ctx.wallet.key
@@ -504,12 +608,15 @@ class SeedKeeperPage(Page):
         if not headers:
             self.flash_error(t("No secrets on card"))
             return MENU_CONTINUE
-        for header in headers:
-            self.flash_text(
-                "%s\n%s" % (self._secret_label(header), _type_name(header["type"])),
-                duration=FLASH_MSG_TIME * 3,
+        while True:
+            menu = Menu(
+                self.ctx,
+                [(self._secret_label(h), lambda h=h: h) for h in headers],
             )
-        return MENU_CONTINUE
+            index, _ = menu.run_loop()
+            if index == menu.back_index:
+                return MENU_CONTINUE
+            self._info_menu(self._secret_details(headers[index]))
 
     def delete_secret(self):
         """Handler for the 'Delete Secret from Card' menu item"""
@@ -550,7 +657,7 @@ class SeedKeeperPage(Page):
         except sk.SeedKeeperError as exc:
             self.flash_error("%s\n%s" % (t("Card error"), exc))
             return MENU_CONTINUE
-        self.flash_text(
+        self._info_menu(
             "%s\n%s\n%s\n%d %s"
             % (
                 t("Free Space"),
@@ -558,8 +665,7 @@ class SeedKeeperPage(Page):
                 t("%s bytes") % status["total_memory"],
                 status["nb_secrets"],
                 t("secrets"),
-            ),
-            duration=FLASH_MSG_TIME * 3,
+            )
         )
         return MENU_CONTINUE
 
@@ -575,7 +681,7 @@ class SeedKeeperPage(Page):
         card, status = self._card_session(transport)
         if card is None:
             return MENU_CONTINUE
-        self.flash_text(
+        self._info_menu(
             "%s\n%s %d.%d\n%s %d.%d"
             % (
                 t("Card Info"),
@@ -585,20 +691,22 @@ class SeedKeeperPage(Page):
                 t("Applet"),
                 status["applet_major_version"],
                 status["applet_minor_version"],
-            ),
-            duration=FLASH_MSG_TIME * 3,
+            )
         )
         return MENU_CONTINUE
 
     # ------------------------------------------------------------- internals
 
-    def _prompt_label(self, key):
+    def _prompt_label(self, key=None, default=None):
         """Ask what to call this seed. None if the user backs out.
 
         Defaults to the wallet's fingerprint, which is what SeedSigner does and
-        is the one label that can be recognised without the card.
+        is the one label that can be recognised without the card.  A new
+        mnemonic has no wallet yet, so its caller supplies a plain default
+        instead and asks before the card is presented.
         """
-        default = key.fingerprint_hex_str(False)
+        if default is None:
+            default = key.fingerprint_hex_str(False)
         while True:
             label = self.capture_from_keypad(
                 t("Seed Label"),
@@ -615,6 +723,34 @@ class SeedKeeperPage(Page):
                     continue
                 return label
             self.flash_error(t("Label cannot be empty"))
+
+    def _generate_card_entropy(self, card, size):
+        """Ask the card for ``size`` random bytes -> (temporary id, entropy).
+
+        INS A3 is the current instruction.  A v0.1 applet only knows the
+        deprecated INS A0, so an "unsupported" answer falls back to it.  Both
+        store a ``[size | bytes]`` secret; the caller deletes it once the
+        final BIP-39 secret exists.
+        """
+        try:
+            temp_id, _ = card.generate_random_secret(size)
+        except sk.SeedKeeperError as exc:
+            if exc.sw not in sk.GENERATE_UNSUPPORTED_SW:
+                raise
+            temp_id, _ = card.generate_masterseed(size)
+        _, secret = self._card_action(card, lambda: card.export_secret(temp_id))
+        if len(secret) < 1 or secret[0] != size or len(secret) < 1 + size:
+            raise sk.SeedKeeperError("Card returned the wrong amount of entropy")
+        return temp_id, bytes(secret[1 : 1 + size])
+
+    def _discard_temp(self, card, temp_id):
+        """Best-effort removal of the temporary entropy secret."""
+        if temp_id is None:
+            return
+        try:
+            card.delete_secret(temp_id)
+        except sk.SeedKeeperError:
+            pass
 
     def _write_seed(self, card, key, label):
         """Import the wallet's seed onto the card. Returns (id, fingerprint).
